@@ -28,6 +28,29 @@ modern browser. the model format is ours. the renderer is ours. the bugs are
 also ours, lovingly handcrafted, locally sourced, and currently being watched
 very closely 👁️
 
+## NEW: hand her one PNG and walk away dramatically
+
+the Maker now contains a **Full Auto Rigger**. click `✨ Auto-rig PNG`, give it
+one front-facing anime portrait, and the browser will—LOCALLY, with no upload
+and no mysterious cloud bucket named `definitely-not-your-waifu`—attempt to:
+
+- remove a flat or transparent background;
+- find the character silhouette;
+- estimate the face from connected skin regions;
+- locate both eyes and the mouth using weighted visual features;
+- preserve the original portrait as the neutral pose;
+- synthesize matching eyelid and mouth-interior surfaces for animation;
+- generate a dense deformable body/head mesh;
+- author head yaw, pitch, roll, body sway, hair motion, blink, mouth-open,
+  and mouth-form keyforms; and
+- open the finished puppet directly in the normal Maker.
+
+it also gives you a confidence score and says which guesses deserve human eyes.
+front-facing characters on simple or transparent backgrounds work best.
+complicated poses, hands over faces, dramatic three-quarter views, and seventeen
+kilometres of foreground hair may require mesh correction afterward because the
+software is brave but it has not achieved enlightenment
+
 > **project status**
 >
 > renderer: alive<br>
@@ -62,8 +85,9 @@ handle:
 - parameter keyforms and interpolation;
 - procedural head, body, eye, mouth, blink, and hair performance;
 - microphone-driven mouth movement;
-- portable self-contained puppet files; and
-- a Maker and Viewer that agree on what all those words mean.
+- portable self-contained puppet files;
+- a Maker and Viewer that agree on what all those words mean; and
+- automatic single-image rigging without sending the artwork off-device.
 
 the important bit is that this is **not** a Live2D `.moc3` decoder wearing a
 fake moustache. it is an original model format and renderer. existing character
@@ -73,6 +97,8 @@ from a legally comfortable distance
 
 ## make a creature (responsibly-ish)
 
+0. Or click **✨ Auto-rig PNG** and let the machine perform the following steps
+   while you supervise with the calm authority of someone holding a drink.
 1. Click the **+** in Layers and import separated PNG, WebP, JPEG, or SVG art.
 2. Select a layer. whisper something encouraging. adjust its base transform.
 3. Choose a parameter such as Head Yaw, Eye Blink, or Mouth Open.
@@ -163,7 +189,7 @@ who has never met a graphics pipeline, this alpha does not yet include:
 
 - PSD import;
 - clipping masks and blend modes;
-- image-aware mesh generation;
+- semantic hair/garment layer separation beyond the auto-rigger's feature lift;
 - animation timelines;
 - full deterministic physics authoring;
 - webcam face tracking;
@@ -171,7 +197,7 @@ who has never met a graphics pipeline, this alpha does not yet include:
 - Live2D `.moc3` loading. no. put it down
 
 the next serious milestone is masking + blend modes, a versioned ZIP container,
-deterministic physics, smarter mesh generation, browser integration tests, and
+deterministic physics, learned segmentation, browser integration tests, and
 an adapter for the VTuber agency's performance intents. after that: assisted
 rigging, better mouth forms, expression layers, and whatever else the puppet
 union demands in writing

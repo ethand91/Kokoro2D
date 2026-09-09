@@ -13,6 +13,7 @@ import {
 } from "./model.js";
 import { KokoroRenderer } from "./renderer.js";
 import { createSampleModel } from "./sample.js";
+import { autoRigFile } from "./auto-rigger.js";
 
 const AUTOSAVE_KEY = "kokoro2d-maker-autosave-v1";
 const canvas = document.querySelector("#makerCanvas");
@@ -453,6 +454,88 @@ elements.modelFile.addEventListener("change", async () => {
   } finally {
     elements.modelFile.value = "";
   }
+});
+
+let autoRigPreviewUrl = null;
+
+function updateAutoRigProgress(message, progress) {
+  elements.autoRigProgress.hidden = false;
+  elements.autoRigProgressText.textContent = message;
+  elements.autoRigProgressBar.style.width = `${Math.round(progress * 100)}%`;
+}
+
+async function runAutoRig(file) {
+  if (!file) return;
+  if (state.dirty && !confirm("Replace the current model with this auto-rig? Your autosave will be replaced.")) return;
+  if (autoRigPreviewUrl) URL.revokeObjectURL(autoRigPreviewUrl);
+  autoRigPreviewUrl = URL.createObjectURL(file);
+  elements.autoRigPreview.src = autoRigPreviewUrl;
+  elements.autoRigPreview.hidden = false;
+  elements.autoRigDropCopy.hidden = true;
+  elements.autoRigReport.hidden = true;
+  elements.autoRigWarnings.replaceChildren();
+  elements.autoRigInput.disabled = true;
+  updateAutoRigProgress("Waking up the pixel goblins", 0.02);
+
+  try {
+    const { model, report } = await autoRigFile(file, { onProgress: updateAutoRigProgress });
+    await loadModel(model, `Auto-rigged ${model.meta.name}`);
+    state.dirty = true;
+    elements.autoRigConfidence.textContent = `${Math.round(report.confidence * 100)}%`;
+    elements.autoRigResultTitle.textContent = `${model.meta.name} is alive`;
+    elements.autoRigResultStats.textContent = `${report.sourceSize} source · ${report.meshVertices} mesh points · ${report.keyforms} authored keyforms · ${report.backgroundMode}`;
+    const warnings = report.warnings.length
+      ? report.warnings
+      : ["No major uncertainty detected. Still inspect the blink and mouth because pixels are sneaky."];
+    for (const warning of warnings) {
+      const item = document.createElement("li");
+      item.textContent = warning;
+      elements.autoRigWarnings.append(item);
+    }
+    elements.autoRigReport.hidden = false;
+    setStatus(`Full auto-rig complete: ${Math.round(report.confidence * 100)}% confidence`, "good");
+  } catch (error) {
+    console.error(error);
+    elements.autoRigResultTitle.textContent = "The ritual encountered a problem";
+    elements.autoRigResultStats.textContent = error.message;
+    elements.autoRigConfidence.textContent = "×";
+    elements.autoRigReport.hidden = false;
+    setStatus(`Auto-rig failed: ${error.message}`, "bad");
+  } finally {
+    elements.autoRigInput.disabled = false;
+  }
+}
+
+elements.autoRigButton.addEventListener("click", () => {
+  elements.autoRigDialog.showModal();
+});
+elements.autoRigInput.addEventListener("change", async () => {
+  await runAutoRig(elements.autoRigInput.files[0]);
+  elements.autoRigInput.value = "";
+});
+for (const eventName of ["dragenter", "dragover"]) {
+  elements.autoRigDrop.addEventListener(eventName, (event) => {
+    event.preventDefault();
+    elements.autoRigDrop.classList.add("dragging");
+  });
+}
+for (const eventName of ["dragleave", "drop"]) {
+  elements.autoRigDrop.addEventListener(eventName, (event) => {
+    event.preventDefault();
+    elements.autoRigDrop.classList.remove("dragging");
+  });
+}
+elements.autoRigDrop.addEventListener("drop", async (event) => {
+  await runAutoRig([...event.dataTransfer.files].find((file) => file.type.startsWith("image/")));
+});
+elements.autoRigDialog.addEventListener("close", () => {
+  if (autoRigPreviewUrl) URL.revokeObjectURL(autoRigPreviewUrl);
+  autoRigPreviewUrl = null;
+  elements.autoRigPreview.removeAttribute("src");
+  elements.autoRigPreview.hidden = true;
+  elements.autoRigDropCopy.hidden = false;
+  elements.autoRigProgress.hidden = true;
+  elements.autoRigReport.hidden = true;
 });
 elements.newSample.addEventListener("click", async () => {
   if (state.dirty && !confirm("Replace the current model with a fresh sample?")) return;

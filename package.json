@@ -7,7 +7,7 @@
   "scripts": {
     "start": "python3 -m http.server 5173",
     "test": "node --test",
-    "check": "node --check src/model.js && node --check src/sample.js && node --check src/renderer.js && node --check src/app.js && node --check src/viewer.js && node --test"
+    "check": "node --check src/model.js && node --check src/sample.js && node --check src/renderer.js && node --check src/auto-rigger.js && node --check src/app.js && node --check src/viewer.js && node --test"
   },
   "engines": {
     "node": ">=20"

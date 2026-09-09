@@ -14,6 +14,7 @@
       <span><strong>Kokoro2D</strong><small>Maker alpha</small></span>
     </a>
     <div class="toolbar">
+      <button id="autoRigButton" class="sparkle-button" type="button">✨ Auto-rig PNG</button>
       <button id="newSample" type="button">New sample</button>
       <button id="importModel" type="button">Open</button>
       <button id="exportModel" class="primary" type="button">Export .kokoro2d</button>
@@ -101,6 +102,40 @@
       </section>
     </aside>
   </main>
+
+  <dialog id="autoRigDialog" class="auto-rig-dialog">
+    <form method="dialog" class="dialog-card">
+      <div class="dialog-heading">
+        <div>
+          <span class="eyebrow">Kokoro vision lab</span>
+          <h2>Full Auto Rigger ✨</h2>
+        </div>
+        <button id="autoRigClose" class="dialog-close" value="cancel" aria-label="Close" type="submit">×</button>
+      </div>
+      <p class="dialog-copy">Give her one front-facing anime PNG. Kokoro2D will remove the background, find her face, rebuild movable features, generate meshes, and author a starter rig locally in your browser.</p>
+
+      <label id="autoRigDrop" class="auto-rig-drop">
+        <input id="autoRigInput" type="file" accept="image/png,image/webp,image/jpeg" hidden>
+        <img id="autoRigPreview" alt="Uploaded character preview" hidden>
+        <span id="autoRigDropCopy"><strong>Drop an anime girl here</strong><small>or click to choose PNG, WebP, or JPEG</small></span>
+      </label>
+
+      <div id="autoRigProgress" class="auto-rig-progress" hidden>
+        <div class="progress-track"><span id="autoRigProgressBar"></span></div>
+        <p id="autoRigProgressText">Preparing the ritual…</p>
+      </div>
+
+      <section id="autoRigReport" class="auto-rig-report" hidden>
+        <div class="confidence-ring"><strong id="autoRigConfidence">—</strong><span>confidence</span></div>
+        <div>
+          <h3 id="autoRigResultTitle">Rig complete</h3>
+          <p id="autoRigResultStats"></p>
+          <ul id="autoRigWarnings"></ul>
+        </div>
+      </section>
+      <p class="privacy-note">🔒 Processing stays on this device. Your artwork is not uploaded anywhere.</p>
+    </form>
+  </dialog>
 
   <script type="module" src="./src/app.js"></script>
 </body>

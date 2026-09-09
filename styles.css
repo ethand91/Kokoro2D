@@ -41,6 +41,11 @@ button:disabled { opacity: .36; cursor: not-allowed; }
 button.primary, .button.primary { background: linear-gradient(135deg, var(--pink-strong), #9b63e8); border-color: transparent; color: white; }
 button.active { background: rgba(111, 226, 186, .14); border-color: rgba(111, 226, 186, .48); }
 button.danger { color: #ff9aa8; }
+.sparkle-button {
+  border-color: rgba(255, 142, 216, .48);
+  background: linear-gradient(135deg, rgba(255, 95, 199, .18), rgba(159, 122, 234, .18));
+  box-shadow: inset 0 0 18px rgba(255, 142, 216, .05);
+}
 
 .topbar {
   height: 64px;
@@ -139,6 +144,81 @@ input[type="range"] { width: 100%; accent-color: var(--pink-strong); }
 .viewer-control { display: grid; grid-template-columns: 1fr auto; gap: 6px; margin: 13px 0; }
 .viewer-control output { color: var(--pink); }
 .viewer-control input { grid-column: 1 / -1; }
+
+.auto-rig-dialog {
+  width: min(620px, calc(100vw - 28px));
+  max-height: calc(100vh - 36px);
+  padding: 0;
+  border: 1px solid rgba(255, 142, 216, .28);
+  border-radius: 20px;
+  background: #1c1326;
+  color: var(--text);
+  box-shadow: 0 30px 100px rgba(0, 0, 0, .6), 0 0 80px rgba(255, 95, 199, .09);
+  overflow: auto;
+}
+.auto-rig-dialog::backdrop { background: rgba(8, 4, 12, .78); backdrop-filter: blur(8px); }
+.dialog-card { padding: 24px; }
+.dialog-heading { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; }
+.dialog-heading h2 { margin: 3px 0 0; font-size: 1.55rem; }
+.eyebrow { color: var(--pink); font-size: .65rem; text-transform: uppercase; letter-spacing: .16em; }
+.dialog-close { width: 36px; height: 36px; padding: 0; border-radius: 50%; font-size: 1.35rem; }
+.dialog-copy { margin: 13px 0 18px; color: var(--muted); line-height: 1.55; font-size: .82rem; }
+.auto-rig-drop {
+  min-height: 250px;
+  margin: 0;
+  display: grid;
+  place-items: center;
+  position: relative;
+  overflow: hidden;
+  border: 1px dashed rgba(255, 142, 216, .48);
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(159, 122, 234, .19), transparent 44%),
+    rgba(255, 255, 255, .025);
+  cursor: pointer;
+  transition: border-color .15s, background .15s, transform .15s;
+}
+.auto-rig-drop:hover, .auto-rig-drop.dragging {
+  border-color: var(--pink);
+  background-color: rgba(255, 142, 216, .08);
+  transform: translateY(-1px);
+}
+.auto-rig-drop > span { display: grid; gap: 6px; text-align: center; }
+.auto-rig-drop strong { color: var(--text); font-size: 1rem; }
+.auto-rig-drop small { color: var(--muted); }
+.auto-rig-drop img { width: 100%; height: 300px; object-fit: contain; }
+.auto-rig-progress { margin-top: 16px; }
+.progress-track { height: 7px; overflow: hidden; border-radius: 99px; background: rgba(255, 255, 255, .08); }
+.progress-track span { display: block; width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--pink-strong), var(--violet)); transition: width .24s ease; }
+.auto-rig-progress p { margin: 7px 0 0; color: var(--muted); font-size: .74rem; }
+.auto-rig-report {
+  display: grid;
+  grid-template-columns: 82px 1fr;
+  gap: 16px;
+  align-items: center;
+  margin-top: 16px;
+  padding: 15px;
+  border: 1px solid rgba(111, 226, 186, .22);
+  border-radius: 14px;
+  background: rgba(111, 226, 186, .055);
+}
+.auto-rig-report[hidden] { display: none; }
+.confidence-ring {
+  width: 76px;
+  height: 76px;
+  display: grid;
+  place-content: center;
+  text-align: center;
+  border: 3px solid var(--good);
+  border-radius: 50%;
+  box-shadow: inset 0 0 18px rgba(111, 226, 186, .08);
+}
+.confidence-ring strong { font-size: 1.15rem; }
+.confidence-ring span { color: var(--muted); font-size: .55rem; text-transform: uppercase; }
+.auto-rig-report h3 { margin: 0 0 4px; font-size: .95rem; }
+.auto-rig-report p { margin: 0; color: var(--muted); font-size: .7rem; line-height: 1.5; }
+.auto-rig-report ul { margin: 7px 0 0; padding-left: 17px; color: #d8c8e2; font-size: .7rem; line-height: 1.45; }
+.privacy-note { margin: 13px 2px 0; color: var(--muted); font-size: .68rem; }
 
 @media (max-width: 980px) {
   .maker-layout { grid-template-columns: 200px minmax(400px, 1fr); }
