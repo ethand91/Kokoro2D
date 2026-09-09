@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#17101f">
+  <title>Kokoro2D Viewer</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body class="viewer-page">
+  <header class="topbar">
+    <a class="brand" href="./index.html">
+      <span class="brand-mark">心</span>
+      <span><strong>Kokoro2D</strong><small>Viewer alpha</small></span>
+    </a>
+    <div class="toolbar">
+      <button id="openModel" class="primary" type="button">Load .kokoro2d</button>
+      <a class="button" href="./index.html">← Maker</a>
+      <input id="viewerFile" type="file" accept=".kokoro2d,application/json" hidden>
+    </div>
+  </header>
+
+  <main class="viewer-layout">
+    <section class="viewer-stage-wrap">
+      <canvas id="viewerCanvas"></canvas>
+      <div class="viewer-title-card">
+        <span class="eyebrow">Now rendering</span>
+        <h1 id="puppetTitle">Kokoro-chan</h1>
+        <p id="puppetByline">by Kokoro2D</p>
+      </div>
+      <div class="viewer-status"><span class="status-dot"></span><span id="viewerStatus">Loading…</span></div>
+    </section>
+
+    <aside class="viewer-sidebar panel">
+      <h2>Performance</h2>
+      <label class="checkbox switch-line"><input id="demoMode" type="checkbox" checked> Procedural performance</label>
+      <button id="enableMic" type="button">Enable microphone lip sync</button>
+      <p class="hint">Move the pointer over the character to direct her gaze. Touch any slider to pause the procedural demo.</p>
+      <div id="viewerControls" class="viewer-controls"></div>
+    </aside>
+  </main>
+
+  <script type="module" src="./src/viewer.js"></script>
+</body>
+</html>
