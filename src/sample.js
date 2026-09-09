@@ -1,158 +1,153 @@
 import { createLayer, createModel, ensureKeyform } from "./model.js";
 
+const AVATAR_ASSET = "./static/kokoro-chan.webp";
+
 function svgData(width, height, body) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${body}</svg>`;
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
-function addKey(layer, parameter, value, transform = {}, vertexEdits = []) {
+function addTransformKey(layer, parameter, value, transform) {
+  Object.assign(ensureKeyform(layer, parameter, value).transform, transform);
+}
+
+function addWarpKey(layer, parameter, value, warp) {
   const key = ensureKeyform(layer, parameter, value);
-  Object.assign(key.transform, transform);
-  for (const [vertexIndex, x, y] of vertexEdits) {
-    key.offsets[vertexIndex * 2] = x;
-    key.offsets[vertexIndex * 2 + 1] = y;
+  const { columns, rows, vertices } = layer.mesh;
+  for (let index = 0; index < vertices.length; index += 2) {
+    const vertex = index / 2;
+    const column = vertex % (columns + 1);
+    const row = Math.floor(vertex / (columns + 1));
+    const u = column / columns;
+    const v = row / rows;
+    const [x, y] = warp(u, v, vertices[index], vertices[index + 1]);
+    key.offsets[index] = x;
+    key.offsets[index + 1] = y;
   }
+}
+
+function clamp(value, minimum = 0, maximum = 1) {
+  return Math.max(minimum, Math.min(maximum, value));
+}
+
+function addPortraitMotion(layer) {
+  const headWeight = (u, v) => {
+    const dx = (u - 0.5) / 0.36;
+    const dy = (v - 0.255) / 0.235;
+    return clamp(1 - Math.sqrt(dx * dx + dy * dy)) ** 0.58;
+  };
+
+  for (const direction of [-1, 1]) {
+    addWarpKey(layer, "head.yaw", direction, (u, v) => {
+      const weight = headWeight(u, v);
+      return [direction * (24 + (v - 0.25) * 12) * weight, direction * (u - 0.5) * 7 * weight];
+    });
+    addWarpKey(layer, "head.pitch", direction, (u, v) => [0, direction * 17 * headWeight(u, v)]);
+    addWarpKey(layer, "head.roll", direction, (u, v, x, y) => {
+      const weight = headWeight(u, v);
+      const centerY = -225;
+      const angle = direction * 0.075 * weight;
+      const dy = y - centerY;
+      return [x * Math.cos(angle) - dy * Math.sin(angle) - x, x * Math.sin(angle) + dy * Math.cos(angle) - dy];
+    });
+    addWarpKey(layer, "body.sway", direction, (u, v) => {
+      const weight = clamp((v - 0.35) / 0.65);
+      return [direction * 26 * weight, direction * (u - 0.5) * 5 * weight];
+    });
+    addWarpKey(layer, "hair.motion", direction, (u, v) => {
+      const edge = clamp(Math.abs(u - 0.5) * 2);
+      const longHair = clamp((v - 0.18) / 0.82);
+      const outsideFace = 1 - headWeight(u, v) * 0.8;
+      return [direction * (8 + longHair * 22) * edge * outsideFace, 3 * edge * longHair];
+    });
+  }
+}
+
+function addHeadFollower(layer) {
+  for (const direction of [-1, 1]) {
+    addTransformKey(layer, "head.yaw", direction, { x: direction * 23, rotation: direction * 0.016 });
+    addTransformKey(layer, "head.pitch", direction, { y: direction * 17 });
+    addTransformKey(layer, "head.roll", direction, { rotation: direction * 0.075 });
+  }
+}
+
+function createEyelid(name, x) {
+  const width = 68;
+  const height = 36;
+  const layer = createLayer({
+    name,
+    width,
+    height,
+    columns: 3,
+    rows: 2,
+    x,
+    y: -277,
+    zIndex: 1,
+    src: svgData(width, height, `
+      <defs><radialGradient id="skin"><stop offset="0" stop-color="#f9d8d0"/><stop offset=".72" stop-color="#f5cbc8"/><stop offset="1" stop-color="#f5cbc8" stop-opacity="0"/></radialGradient></defs>
+      <ellipse cx="34" cy="18" rx="33" ry="16" fill="url(#skin)"/>
+      <path d="M9 18Q34 28 59 18" fill="none" stroke="#563744" stroke-width="3" stroke-linecap="round"/>
+    `),
+  });
+  layer.transform.opacity = 0;
+  addHeadFollower(layer);
+  addTransformKey(layer, "eyes.blink", 0.12, { opacity: 0 });
+  addTransformKey(layer, "eyes.blink", 1, { opacity: 1 });
+  return layer;
+}
+
+function createMouth() {
+  const width = 68;
+  const height = 44;
+  const layer = createLayer({
+    name: "Animated Mouth",
+    width,
+    height,
+    columns: 3,
+    rows: 2,
+    x: 0,
+    y: -231,
+    zIndex: 2,
+    src: svgData(width, height, `
+      <ellipse cx="34" cy="21" rx="25" ry="17" fill="#672b48" stroke="#4d293d" stroke-width="2"/>
+      <path d="M17 30Q34 19 52 30Q43 38 34 38T17 30Z" fill="#ec8ca9"/>
+      <path d="M14 13Q34 7 54 13" fill="none" stroke="#fff5f0" stroke-width="2" stroke-linecap="round" opacity=".92"/>
+    `),
+  });
+  layer.transform.opacity = 0;
+  layer.transform.scaleY = 0.24;
+  addHeadFollower(layer);
+  addTransformKey(layer, "mouth.open", 0.12, { opacity: 0 });
+  addTransformKey(layer, "mouth.open", 1, { opacity: 1, scaleY: 0.76 });
+  addTransformKey(layer, "mouth.form", -1, { scaleX: -0.2, rotation: -0.02 });
+  addTransformKey(layer, "mouth.form", 1, { scaleX: 0.22 });
+  return layer;
 }
 
 export function createSampleModel() {
   const model = createModel("Kokoro-chan");
   model.meta.author = "Kokoro2D";
   model.meta.license = "CC0 sample puppet";
-  model.canvas.background = "#1b1126";
+  model.meta.artwork = "Original Kokoro2D default character";
+  model.canvas.background = "#160e20";
 
-  const hairBack = createLayer({
-    name: "Back Hair",
-    width: 520,
-    height: 620,
-    columns: 5,
-    rows: 6,
-    y: 25,
+  const portrait = createLayer({
+    name: "Kokoro-chan Portrait",
+    width: 620,
+    height: 930,
+    columns: 10,
+    rows: 14,
+    y: 0,
     zIndex: 0,
-    src: svgData(520, 620, `
-      <defs><linearGradient id="h" x2="0" y2="1"><stop stop-color="#6040a5"/><stop offset="1" stop-color="#2e1d5e"/></linearGradient></defs>
-      <path d="M260 25C95 25 42 155 58 329c8 94 1 190-35 255 62 18 111-8 142-49 17 42 53 67 95 67s78-25 95-67c31 41 80 67 142 49-36-65-43-161-35-255C478 155 425 25 260 25Z" fill="url(#h)" stroke="#ad8df4" stroke-width="8"/>
-    `),
+    src: AVATAR_ASSET,
   });
-  addKey(hairBack, "hair.motion", -1, { rotation: -0.035 }, [[35, -24, 0], [34, -18, 0], [41, -35, 0]]);
-  addKey(hairBack, "hair.motion", 1, { rotation: 0.035 }, [[35, 24, 0], [34, 18, 0], [41, 35, 0]]);
+  addPortraitMotion(portrait);
 
-  const ears = createLayer({
-    name: "Cat Ears",
-    width: 430,
-    height: 190,
-    columns: 3,
-    rows: 2,
-    y: -235,
-    zIndex: 1,
-    src: svgData(430, 190, `
-      <path d="M25 167 70 18l125 129Z" fill="#6040a5" stroke="#ad8df4" stroke-width="8" stroke-linejoin="round"/>
-      <path d="m235 147 125-129 45 149Z" fill="#6040a5" stroke="#ad8df4" stroke-width="8" stroke-linejoin="round"/>
-      <path d="M58 139 78 65l69 72Z" fill="#f5a8d6"/><path d="m283 137 69-72 20 74Z" fill="#f5a8d6"/>
-    `),
-  });
-  addKey(ears, "head.yaw", -1, { x: -18, rotation: -0.04 });
-  addKey(ears, "head.yaw", 1, { x: 18, rotation: 0.04 });
-
-  const body = createLayer({
-    name: "Body",
-    width: 440,
-    height: 390,
-    columns: 4,
-    rows: 4,
-    y: 360,
-    zIndex: 2,
-    src: svgData(440, 390, `
-      <defs><linearGradient id="b"><stop stop-color="#df73bd"/><stop offset="1" stop-color="#7545b8"/></linearGradient></defs>
-      <path d="M92 373c4-171 38-278 128-278s124 107 128 278Z" fill="url(#b)" stroke="#f6c1e5" stroke-width="8"/>
-      <path d="m143 111 77 78 77-78-24-42H167Z" fill="#fff1fa"/>
-      <path d="m220 188-30 57 30 41 30-41Z" fill="#ffd45d"/>
-    `),
-  });
-  addKey(body, "body.sway", -1, { x: -35, rotation: -0.055 });
-  addKey(body, "body.sway", 1, { x: 35, rotation: 0.055 });
-
-  const face = createLayer({
-    name: "Face",
-    width: 390,
-    height: 455,
-    columns: 5,
-    rows: 5,
-    y: -15,
-    zIndex: 3,
-    src: svgData(390, 455, `
-      <defs><radialGradient id="s" cx="45%" cy="38%"><stop stop-color="#fffaf7"/><stop offset="1" stop-color="#f3c5c8"/></radialGradient></defs>
-      <path d="M195 21C87 21 33 111 48 232c12 101 65 187 147 187s135-86 147-187C357 111 303 21 195 21Z" fill="url(#s)" stroke="#4a2c66" stroke-width="7"/>
-      <ellipse cx="101" cy="276" rx="37" ry="17" fill="#f38fae" opacity=".42"/><ellipse cx="289" cy="276" rx="37" ry="17" fill="#f38fae" opacity=".42"/>
-    `),
-  });
-  addKey(face, "head.yaw", -1, { x: -22, rotation: -0.025 });
-  addKey(face, "head.yaw", 1, { x: 22, rotation: 0.025 });
-  addKey(face, "head.pitch", -1, { y: -18, scaleY: 0.025 });
-  addKey(face, "head.pitch", 1, { y: 18, scaleY: -0.025 });
-  addKey(face, "head.roll", -1, { rotation: -0.12 });
-  addKey(face, "head.roll", 1, { rotation: 0.12 });
-
-  const eyes = createLayer({
-    name: "Eyes",
-    width: 285,
-    height: 90,
-    columns: 4,
-    rows: 2,
-    y: -70,
-    zIndex: 4,
-    src: svgData(285, 90, `
-      <path d="M10 48Q52 4 101 48Q53 82 10 48Zm174 0q49-44 91 0-43 34-91 0Z" fill="#fff" stroke="#42265b" stroke-width="7"/>
-      <ellipse cx="58" cy="46" rx="18" ry="29" fill="#8f65e8"/><ellipse cx="227" cy="46" rx="18" ry="29" fill="#8f65e8"/>
-      <ellipse cx="58" cy="48" rx="8" ry="18" fill="#21152e"/><ellipse cx="227" cy="48" rx="8" ry="18" fill="#21152e"/>
-      <circle cx="52" cy="35" r="5" fill="#fff"/><circle cx="221" cy="35" r="5" fill="#fff"/>
-    `),
-  });
-  addKey(eyes, "eyes.blink", 1, { scaleY: -0.88, y: 2 });
-  addKey(eyes, "eyes.lookX", -1, { x: -8 });
-  addKey(eyes, "eyes.lookX", 1, { x: 8 });
-  addKey(eyes, "eyes.lookY", -1, { y: -6 });
-  addKey(eyes, "eyes.lookY", 1, { y: 6 });
-  addKey(eyes, "head.yaw", -1, { x: -30 });
-  addKey(eyes, "head.yaw", 1, { x: 30 });
-
-  const mouth = createLayer({
-    name: "Mouth",
-    width: 125,
-    height: 72,
-    columns: 3,
-    rows: 2,
-    y: 78,
-    zIndex: 5,
-    src: svgData(125, 72, `
-      <path d="M8 27Q63 3 117 27Q105 67 63 68Q20 67 8 27Z" fill="#6d244d" stroke="#49213e" stroke-width="6"/>
-      <path d="M27 54q36-21 71 0-17 13-35 13S42 63 27 54Z" fill="#f58eb7"/>
-    `),
-  });
-  mouth.transform.scaleY = 0.12;
-  addKey(mouth, "mouth.open", 1, { scaleY: 0.88 });
-  addKey(mouth, "mouth.form", -1, { scaleX: -0.25, rotation: -0.025 });
-  addKey(mouth, "mouth.form", 1, { scaleX: 0.28 });
-  addKey(mouth, "head.yaw", -1, { x: -25 });
-  addKey(mouth, "head.yaw", 1, { x: 25 });
-
-  const fringe = createLayer({
-    name: "Front Hair",
-    width: 430,
-    height: 235,
-    columns: 5,
-    rows: 3,
-    y: -172,
-    zIndex: 6,
-    src: svgData(430, 235, `
-      <defs><linearGradient id="f"><stop stop-color="#9872e8"/><stop offset="1" stop-color="#583590"/></linearGradient></defs>
-      <path d="M22 113C51 18 139-12 221 12c94-27 174 30 190 118-38-22-69-27-101-18-8 53-40 88-84 108 2-34-4-66-20-93-21 44-54 75-98 91 13-39 13-77 2-113-27 31-57 49-88 52Z" fill="url(#f)" stroke="#4b2b74" stroke-width="7" stroke-linejoin="round"/>
-    `),
-  });
-  addKey(fringe, "head.yaw", -1, { x: -19, rotation: -0.025 });
-  addKey(fringe, "head.yaw", 1, { x: 19, rotation: 0.025 });
-  addKey(fringe, "hair.motion", -1, { rotation: -0.025 });
-  addKey(fringe, "hair.motion", 1, { rotation: 0.025 });
-
-  model.layers.push(hairBack, ears, body, face, eyes, mouth, fringe);
+  model.layers.push(
+    portrait,
+    createEyelid("Left Eyelid", -42),
+    createEyelid("Right Eyelid", 42),
+    createMouth(),
+  );
   return model;
 }

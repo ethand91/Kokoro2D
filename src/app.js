@@ -214,16 +214,28 @@ function applyTransform(property, value) {
   changed();
 }
 
-function downloadModel() {
-  const contents = serializeModel(state.model);
-  const blob = new Blob([contents], { type: "application/vnd.kokoro2d+json" });
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
-  link.download = `${safeFilename(state.model.meta.name)}.kokoro2d`;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
-  state.dirty = false;
-  setStatus(`Exported ${link.download}`, "good");
+async function downloadModel() {
+  try {
+    const portableModel = clone(state.model);
+    await Promise.all(portableModel.layers.map(async (layer) => {
+      if (layer.source.src.startsWith("data:")) return;
+      const response = await fetch(layer.source.src);
+      if (!response.ok) throw new Error(`Unable to embed ${layer.name}.`);
+      layer.source.src = await readAsDataUrl(await response.blob());
+      layer.source.type = "embedded";
+    }));
+    const contents = serializeModel(portableModel);
+    const blob = new Blob([contents], { type: "application/vnd.kokoro2d+json" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `${safeFilename(state.model.meta.name)}.kokoro2d`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+    state.dirty = false;
+    setStatus(`Exported ${link.download}`, "good");
+  } catch (error) {
+    setStatus(`Export failed: ${error.message}`, "bad");
+  }
 }
 
 async function importFiles(files) {

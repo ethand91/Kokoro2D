@@ -15,7 +15,9 @@ test("sample model satisfies schema", () => {
   const model = createSampleModel();
   assert.deepEqual(validateModel(model), []);
   assert.equal(model.schema, "kokoro2d");
-  assert.ok(model.layers.length >= 6);
+  assert.equal(model.layers.length, 4);
+  assert.equal(model.layers[0].source.src, "./static/kokoro-chan.webp");
+  assert.ok(model.layers[0].mesh.vertices.length >= 300);
 });
 
 test("model serialization round-trips", () => {

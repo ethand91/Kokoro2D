@@ -28,6 +28,10 @@ modern browser. the model format is ours. the renderer is ours. the bugs are
 also ours, lovingly handcrafted, locally sourced, and currently being watched
 very closely 👁️
 
+the default puppet is now an actual original anime VTuber named Kokoro-chan,
+complete with dense portrait deformation, blink surfaces, mouth animation, and
+enough violet hair to destabilize a modest graphics card emotionally
+
 ## NEW: hand her one PNG and walk away dramatically
 
 the Maker now contains a **Full Auto Rigger**. click `✨ Auto-rig PNG`, give it
