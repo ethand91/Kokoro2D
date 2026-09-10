@@ -72,8 +72,8 @@ function addHeadFollower(layer) {
 }
 
 function createEyelid(name, x) {
-  const width = 68;
-  const height = 36;
+  const width = 76;
+  const height = 52;
   const layer = createLayer({
     name,
     width,
@@ -81,12 +81,12 @@ function createEyelid(name, x) {
     columns: 3,
     rows: 2,
     x,
-    y: -277,
+    y: -249,
     zIndex: 1,
     src: svgData(width, height, `
       <defs><radialGradient id="skin"><stop offset="0" stop-color="#f9d8d0"/><stop offset=".72" stop-color="#f5cbc8"/><stop offset="1" stop-color="#f5cbc8" stop-opacity="0"/></radialGradient></defs>
-      <ellipse cx="34" cy="18" rx="33" ry="16" fill="url(#skin)"/>
-      <path d="M9 18Q34 28 59 18" fill="none" stroke="#563744" stroke-width="3" stroke-linecap="round"/>
+      <ellipse cx="38" cy="26" rx="37" ry="25" fill="url(#skin)"/>
+      <path d="M10 27Q38 38 66 27" fill="none" stroke="#563744" stroke-width="3" stroke-linecap="round"/>
     `),
   });
   layer.transform.opacity = 0;
@@ -106,7 +106,7 @@ function createMouth() {
     columns: 3,
     rows: 2,
     x: 0,
-    y: -231,
+    y: -204,
     zIndex: 2,
     src: svgData(width, height, `
       <ellipse cx="34" cy="21" rx="25" ry="17" fill="#672b48" stroke="#4d293d" stroke-width="2"/>
@@ -145,8 +145,8 @@ export function createSampleModel() {
 
   model.layers.push(
     portrait,
-    createEyelid("Left Eyelid", -42),
-    createEyelid("Right Eyelid", 42),
+    createEyelid("Left Eyelid", -44),
+    createEyelid("Right Eyelid", 47),
     createMouth(),
   );
   return model;
