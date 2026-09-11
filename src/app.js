@@ -344,15 +344,20 @@ function animate(timeMs) {
   if (state.model) {
     if (state.autoplay) {
       const time = timeMs / 1000;
-      state.values["head.yaw"] = Math.sin(time * 0.65) * 0.7;
-      state.values["head.pitch"] = Math.sin(time * 0.93) * 0.22;
-      state.values["head.roll"] = Math.sin(time * 0.47) * 0.18;
-      state.values["body.sway"] = Math.sin(time * 0.5) * 0.52;
-      state.values["hair.motion"] = Math.sin(time * 0.72 - 0.7) * 0.8;
-      state.values["eyes.lookX"] = Math.sin(time * 0.41) * 0.45;
-      state.values["mouth.open"] = (Math.sin(time * 8) * 0.5 + 0.5) * 0.55;
-      const blinkPhase = time % 3.7;
-      state.values["eyes.blink"] = blinkPhase > 3.48 ? Math.sin((blinkPhase - 3.48) / 0.22 * Math.PI) : 0;
+      const yaw = Math.sin(time * 0.31) * 0.25 + Math.sin(time * 0.73 + 1.1) * 0.07;
+      const speech = Math.max(0, Math.sin(time * 0.52 + 0.4)) ** 1.8;
+      state.values["head.yaw"] = yaw;
+      state.values["head.pitch"] = Math.sin(time * 0.23 + 0.8) * 0.07;
+      state.values["head.roll"] = -yaw * 0.14 + Math.sin(time * 0.19) * 0.025;
+      state.values["body.sway"] = Math.sin(time * 0.27 + 0.5) * 0.14;
+      state.values["body.breathe"] = Math.sin(time * 1.12) * 0.48;
+      state.values["hair.motion"] = -yaw * 0.34 + Math.sin(time * 0.43 - 0.7) * 0.08;
+      state.values["eyes.lookX"] = Math.sin(time * 0.37) * 0.18;
+      state.values["eyes.lookY"] = Math.sin(time * 0.29 + 0.4) * 0.08;
+      state.values["mouth.open"] = speech * (0.12 + (Math.sin(time * 8.1) * 0.5 + 0.5) * 0.25);
+      state.values["mouth.form"] = Math.sin(time * 2.1) * 0.1;
+      const blinkPhase = time % 4.3;
+      state.values["eyes.blink"] = blinkPhase > 4.12 ? Math.sin((blinkPhase - 4.12) / 0.18 * Math.PI) : 0;
     }
     renderer.render(state.values);
     drawOverlay();

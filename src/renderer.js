@@ -27,10 +27,18 @@ precision mediump float;
 in vec2 v_uv;
 uniform sampler2D u_texture;
 uniform float u_opacity;
+uniform vec4 u_uv_rect;
+uniform float u_edge_feather;
+uniform float u_ellipse_mask;
 out vec4 outColor;
 void main() {
-  vec4 color = texture(u_texture, v_uv);
-  outColor = vec4(color.rgb, color.a * u_opacity);
+  vec2 textureUv = u_uv_rect.xy + v_uv * u_uv_rect.zw;
+  vec4 color = texture(u_texture, textureUv);
+  float rectangleEdge = min(min(v_uv.x, 1.0 - v_uv.x), min(v_uv.y, 1.0 - v_uv.y));
+  float ellipseEdge = (1.0 - length((v_uv - 0.5) * 2.0)) * 0.5;
+  float edge = mix(rectangleEdge, ellipseEdge, u_ellipse_mask);
+  float featherMask = u_edge_feather > 0.0 ? smoothstep(0.0, u_edge_feather, edge) : 1.0;
+  outColor = vec4(color.rgb, color.a * u_opacity * featherMask);
 }`;
 
 function shader(gl, type, source) {
@@ -97,6 +105,9 @@ export class KokoroRenderer {
       rotation: getUniform("u_rotation"),
       zoom: getUniform("u_zoom"),
       opacity: getUniform("u_opacity"),
+      uvRect: getUniform("u_uv_rect"),
+      edgeFeather: getUniform("u_edge_feather"),
+      ellipseMask: getUniform("u_ellipse_mask"),
     };
   }
 
@@ -139,7 +150,21 @@ export class KokoroRenderer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
     gl.bindVertexArray(null);
-    return { vao, positionBuffer, uvBuffer, indexBuffer, texture, count: layer.mesh.indices.length };
+    const crop = layer.source.crop;
+    const uvRect = crop
+      ? [crop.x / image.width, crop.y / image.height, crop.width / image.width, crop.height / image.height]
+      : [0, 0, 1, 1];
+    return {
+      vao,
+      positionBuffer,
+      uvBuffer,
+      indexBuffer,
+      texture,
+      count: layer.mesh.indices.length,
+      uvRect,
+      edgeFeather: Math.max(0, Math.min(0.49, Number(layer.source.feather ?? 0))),
+      ellipseMask: layer.source.mask === "ellipse" ? 1 : 0,
+    };
   }
 
   resize() {
@@ -180,6 +205,9 @@ export class KokoroRenderer {
       gl.uniform2f(this.locations.scale, pose.transform.scaleX, pose.transform.scaleY);
       gl.uniform1f(this.locations.rotation, pose.transform.rotation);
       gl.uniform1f(this.locations.opacity, pose.transform.opacity);
+      gl.uniform4fv(this.locations.uvRect, resources.uvRect);
+      gl.uniform1f(this.locations.edgeFeather, resources.edgeFeather);
+      gl.uniform1f(this.locations.ellipseMask, resources.ellipseMask);
       gl.drawElements(gl.TRIANGLES, resources.count, gl.UNSIGNED_INT, 0);
     }
     gl.bindVertexArray(null);

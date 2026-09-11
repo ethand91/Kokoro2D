@@ -17,7 +17,11 @@ test("sample model satisfies schema", () => {
   assert.equal(model.schema, "kokoro2d");
   assert.equal(model.layers.length, 4);
   assert.equal(model.layers[0].source.src, "./static/kokoro-chan.webp");
-  assert.ok(model.layers[0].mesh.vertices.length >= 300);
+  assert.ok(model.layers[0].mesh.vertices.length >= 1200);
+  assert.ok(model.layers[1].keyforms["eyes.blink"]);
+  assert.deepEqual(model.layers[3].source.crop, { x: 367, y: 310, width: 52, height: 34 });
+  assert.equal(model.layers[3].source.mask, "ellipse");
+  assert.ok(model.parameters["body.breathe"]);
 });
 
 test("model serialization round-trips", () => {

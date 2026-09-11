@@ -70,32 +70,34 @@ async function setModel(nextModel) {
 function animate(timeMs) {
   const time = timeMs / 1000;
   if (demo) {
-    const yaw = Math.sin(time * 0.68) * 0.72;
+    const yaw = Math.sin(time * 0.31) * 0.25 + Math.sin(time * 0.73 + 1.1) * 0.07;
     values["head.yaw"] = yaw;
-    values["head.pitch"] = Math.sin(time * 0.91) * 0.2;
-    values["head.roll"] = Math.sin(time * 0.49) * 0.16;
-    values["body.sway"] = Math.sin(time * 0.51) * 0.55;
-    values["eyes.lookX"] = Math.sin(time * 0.39) * 0.42;
-    values["eyes.lookY"] = Math.sin(time * 0.31) * 0.18;
+    values["head.pitch"] = Math.sin(time * 0.23 + 0.8) * 0.07;
+    values["head.roll"] = -yaw * 0.14 + Math.sin(time * 0.19) * 0.025;
+    values["body.sway"] = Math.sin(time * 0.27 + 0.5) * 0.14;
+    if ("body.breathe" in values) values["body.breathe"] = Math.sin(time * 1.12) * 0.48;
+    values["eyes.lookX"] = Math.sin(time * 0.37) * 0.18;
+    values["eyes.lookY"] = Math.sin(time * 0.29 + 0.4) * 0.08;
     if (time >= blinkAt && blinkStarted === null) blinkStarted = time;
     if (blinkStarted !== null) {
       const elapsed = time - blinkStarted;
-      values["eyes.blink"] = elapsed < 0.22 ? Math.sin(elapsed / 0.22 * Math.PI) : 0;
-      if (elapsed >= 0.22) {
+      values["eyes.blink"] = elapsed < 0.18 ? Math.sin(elapsed / 0.18 * Math.PI) : 0;
+      if (elapsed >= 0.18) {
         blinkStarted = null;
-        blinkAt = time + 2.2 + Math.random() * 2.8;
+        blinkAt = time + 2.8 + Math.random() * 3.4;
       }
     }
-    const target = -yaw * 0.62;
+    const target = -yaw * 0.34;
     const dt = 1 / 60;
-    spring.velocity += (target - spring.position) * 18 * dt;
-    spring.velocity *= Math.pow(0.78, dt * 60);
+    spring.velocity += (target - spring.position) * 11 * dt;
+    spring.velocity *= Math.pow(0.84, dt * 60);
     spring.position += spring.velocity;
     values["hair.motion"] = Math.max(-1, Math.min(1, spring.position));
+    const speech = Math.max(0, Math.sin(time * 0.52 + 0.4)) ** 1.8;
     values["mouth.open"] = microphoneLevel === null
-      ? (Math.sin(time * 7.7) * 0.5 + 0.5) * 0.5
+      ? speech * (0.12 + (Math.sin(time * 8.1) * 0.5 + 0.5) * 0.25)
       : microphoneLevel;
-    values["mouth.form"] = Math.sin(time * 2.4) * 0.32;
+    values["mouth.form"] = Math.sin(time * 2.1) * 0.1;
     if (Math.floor(timeMs / 120) !== Math.floor((timeMs - 16) / 120)) syncControls();
   }
   renderer.render(values);

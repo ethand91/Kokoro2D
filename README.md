@@ -29,8 +29,9 @@ also ours, lovingly handcrafted, locally sourced, and currently being watched
 very closely 👁️
 
 the default puppet is now an actual original anime VTuber named Kokoro-chan,
-complete with dense portrait deformation, blink surfaces, mouth animation, and
-enough violet hair to destabilize a modest graphics card emotionally
+complete with restrained portrait deformation, matching illustrated blink and
+speaking textures, breathing, softly eased motion, and enough violet hair to
+destabilize a modest graphics card emotionally
 
 ## NEW: hand her one PNG and walk away dramatically
 

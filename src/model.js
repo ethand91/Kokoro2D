@@ -164,7 +164,8 @@ function interpolateKeyforms(keyforms, value, defaultValue, vertexValueCount) {
   if (value <= keys[0].value) left = right = keys[0];
   if (value >= keys[keys.length - 1].value) left = right = keys[keys.length - 1];
   const span = right.value - left.value;
-  const amount = span === 0 ? 0 : (value - left.value) / span;
+  const linearAmount = span === 0 ? 0 : (value - left.value) / span;
+  const amount = linearAmount * linearAmount * (3 - 2 * linearAmount);
   const result = zeroPose(vertexValueCount);
 
   for (const property of Object.keys(result.transform)) {
