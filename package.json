@@ -5,9 +5,9 @@
   "type": "module",
   "description": "An open browser-native 2D VTuber maker and viewer.",
   "scripts": {
-    "start": "python3 -m http.server 5173",
+    "start": "python3 serve.py 5173",
     "test": "node --test",
-    "check": "node --check src/model.js && node --check src/sample.js && node --check src/renderer.js && node --check src/app.js && node --check src/viewer.js && node --test"
+    "check": "node --check src/portrait-motion.js && node --check src/anime-mouth.js && node --check src/anime-landmarks.js && node --check src/recorder.js && node --check src/vision.js && node --check src/scene.js && node --check src/layered-rig.js && node --check src/region-geometry.js && node --check src/region-editor.js && node --check src/speech.js && node --check src/speech-performance.js && node --check src/viseme-lipsync.js && node --check src/motion.js && node --check src/rig.js && node --check src/model.js && node --check src/sample-blink.js && node --check src/sample-rig.js && node --check src/sample.js && node --check src/renderer.js && node --check src/auto-rigger.js && node --check src/app.js && node --check src/viewer.js && node --test"
   },
   "engines": {
     "node": ">=20"

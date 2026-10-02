@@ -1,4 +1,4 @@
-import { evaluateLayer } from "./model.js";
+import { evaluateScene } from "./scene.js";
 
 const VERTEX_SHADER = `#version 300 es
 precision highp float;
@@ -27,10 +27,20 @@ precision mediump float;
 in vec2 v_uv;
 uniform sampler2D u_texture;
 uniform float u_opacity;
+uniform vec4 u_uv_rect;
+uniform float u_edge_feather;
+uniform float u_ellipse_mask;
+uniform bool u_mask_pass;
 out vec4 outColor;
 void main() {
-  vec4 color = texture(u_texture, v_uv);
-  outColor = vec4(color.rgb, color.a * u_opacity);
+  vec2 textureUv = u_uv_rect.xy + v_uv * u_uv_rect.zw;
+  vec4 color = texture(u_texture, textureUv);
+  float rectangleEdge = min(min(v_uv.x, 1.0 - v_uv.x), min(v_uv.y, 1.0 - v_uv.y));
+  float ellipseEdge = (1.0 - length((v_uv - 0.5) * 2.0)) * 0.5;
+  float edge = mix(rectangleEdge, ellipseEdge, u_ellipse_mask);
+  float featherMask = u_edge_feather > 0.0 ? smoothstep(0.0, u_edge_feather, edge) : 1.0;
+  if (u_mask_pass && color.a * featherMask * u_opacity < 0.05) discard;
+  outColor = vec4(color.rgb, color.a * u_opacity * featherMask);
 }`;
 
 function shader(gl, type, source) {
@@ -68,6 +78,7 @@ export class KokoroRenderer {
     this.canvas = canvas;
     this.gl = canvas.getContext("webgl2", {
       alpha: true,
+      stencil: true,
       antialias: true,
       premultipliedAlpha: false,
       preserveDrawingBuffer: true,
@@ -80,7 +91,7 @@ export class KokoroRenderer {
     this.camera = { x: 0, y: 0, zoom: 0.78 };
     this.locations = this.#locations();
     this.gl.enable(this.gl.BLEND);
-    this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA);
+    this.gl.blendFuncSeparate(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA, this.gl.ONE, this.gl.ONE_MINUS_SRC_ALPHA);
   }
 
   #locations() {
@@ -97,16 +108,21 @@ export class KokoroRenderer {
       rotation: getUniform("u_rotation"),
       zoom: getUniform("u_zoom"),
       opacity: getUniform("u_opacity"),
+      uvRect: getUniform("u_uv_rect"),
+      edgeFeather: getUniform("u_edge_feather"),
+      maskPass: getUniform("u_mask_pass"),
+      ellipseMask: getUniform("u_ellipse_mask"),
     };
   }
 
   async setModel(model) {
+    // Decode first: a broken texture must not clear the currently playing rig.
+    const images = await Promise.all(model.layers.map(layer => loadImage(layer.source.src)));
     this.disposeResources();
     this.model = model;
-    await Promise.all(model.layers.map(async (layer) => {
-      const image = await loadImage(layer.source.src);
-      this.resources.set(layer.id, this.#createLayerResources(layer, image));
-    }));
+    model.layers.forEach((layer, index) => {
+      this.resources.set(layer.id, this.#createLayerResources(layer, images[index]));
+    });
   }
 
   #createLayerResources(layer, image) {
@@ -139,7 +155,21 @@ export class KokoroRenderer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
     gl.bindVertexArray(null);
-    return { vao, positionBuffer, uvBuffer, indexBuffer, texture, count: layer.mesh.indices.length };
+    const crop = layer.source.crop;
+    const uvRect = crop
+      ? [crop.x / image.width, crop.y / image.height, crop.width / image.width, crop.height / image.height]
+      : [0, 0, 1, 1];
+    return {
+      vao,
+      positionBuffer,
+      uvBuffer,
+      indexBuffer,
+      texture,
+      count: layer.mesh.indices.length,
+      uvRect,
+      edgeFeather: Math.max(0, Math.min(0.49, Number(layer.source.feather ?? 0))),
+      ellipseMask: layer.source.mask === "ellipse" ? 1 : 0,
+    };
   }
 
   resize() {
@@ -165,12 +195,13 @@ export class KokoroRenderer {
     gl.uniform2f(this.locations.camera, this.camera.x, this.camera.y);
     gl.uniform1f(this.locations.zoom, this.camera.zoom * (gl.canvas.width / gl.canvas.clientWidth));
 
+    const poses = evaluateScene(this.model, parameters);
     const layers = [...this.model.layers].sort((a, b) => a.zIndex - b.zIndex);
-    for (const layer of layers) {
-      if (!layer.visible) continue;
+    const draw = (layer, maskPass = false) => {
       const resources = this.resources.get(layer.id);
-      if (!resources) continue;
-      const pose = evaluateLayer(layer, parameters, this.model.parameters);
+      if (!resources) return;
+      const pose = poses.get(layer.id);
+      gl.uniform1i(this.locations.maskPass, maskPass);
       gl.bindVertexArray(resources.vao);
       gl.bindBuffer(gl.ARRAY_BUFFER, resources.positionBuffer);
       gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(pose.vertices), gl.DYNAMIC_DRAW);
@@ -180,8 +211,33 @@ export class KokoroRenderer {
       gl.uniform2f(this.locations.scale, pose.transform.scaleX, pose.transform.scaleY);
       gl.uniform1f(this.locations.rotation, pose.transform.rotation);
       gl.uniform1f(this.locations.opacity, pose.transform.opacity);
+      gl.uniform4fv(this.locations.uvRect, resources.uvRect);
+      gl.uniform1f(this.locations.edgeFeather, resources.edgeFeather);
+      gl.uniform1f(this.locations.ellipseMask, resources.ellipseMask);
       gl.drawElements(gl.TRIANGLES, resources.count, gl.UNSIGNED_INT, 0);
+    };
+    for (const layer of layers) {
+      if (!layer.visible || layer.maskOnly) continue;
+      if (layer.clipMask) {
+        const mask = this.model.layers.find(item => item.id === layer.clipMask);
+        if (!mask) continue;
+        gl.enable(gl.STENCIL_TEST);
+        gl.stencilMask(0xff);
+        gl.clearStencil(0);
+        gl.clear(gl.STENCIL_BUFFER_BIT);
+        gl.colorMask(false, false, false, false);
+        gl.stencilFunc(gl.ALWAYS, 1, 0xff);
+        gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE);
+        draw(mask, true);
+        gl.colorMask(true, true, true, true);
+        gl.stencilMask(0);
+        gl.stencilFunc(gl.EQUAL, 1, 0xff);
+        gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
+      }
+      draw(layer);
+      gl.disable(gl.STENCIL_TEST);
     }
+    gl.stencilMask(0xff);
     gl.bindVertexArray(null);
   }
 

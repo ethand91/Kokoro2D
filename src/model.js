@@ -1,5 +1,9 @@
 export const SCHEMA = "kokoro2d";
-export const SCHEMA_VERSION = 1;
+
+// Where the Maker parks the puppet you are working on. The Viewer reads it so
+// that opening the Viewer shows what you just rigged rather than the sample.
+export const AUTOSAVE_KEY = "kokoro2d-maker-autosave-v1";
+export const SCHEMA_VERSION = 2;
 
 export const STANDARD_PARAMETERS = Object.freeze([
   { id: "head.yaw", name: "Head Yaw", min: -1, max: 1, default: 0 },
@@ -164,7 +168,8 @@ function interpolateKeyforms(keyforms, value, defaultValue, vertexValueCount) {
   if (value <= keys[0].value) left = right = keys[0];
   if (value >= keys[keys.length - 1].value) left = right = keys[keys.length - 1];
   const span = right.value - left.value;
-  const amount = span === 0 ? 0 : (value - left.value) / span;
+  const linearAmount = span === 0 ? 0 : (value - left.value) / span;
+  const amount = linearAmount * linearAmount * (3 - 2 * linearAmount);
   const result = zeroPose(vertexValueCount);
 
   for (const property of Object.keys(result.transform)) {
@@ -220,7 +225,7 @@ export function validateModel(candidate) {
   const errors = [];
   if (!candidate || typeof candidate !== "object") return ["Model must be an object."];
   if (candidate.schema !== SCHEMA) errors.push(`schema must be ${SCHEMA}.`);
-  if (candidate.version !== SCHEMA_VERSION) errors.push(`Unsupported schema version ${candidate.version}.`);
+  if (![1, SCHEMA_VERSION].includes(candidate.version)) errors.push(`Unsupported schema version ${candidate.version}.`);
   if (!candidate.meta?.name) errors.push("meta.name is required.");
   if (!candidate.canvas || candidate.canvas.width <= 0 || candidate.canvas.height <= 0) {
     errors.push("canvas dimensions must be positive.");
@@ -258,6 +263,28 @@ export function validateModel(candidate) {
       }
     }
   });
+  for (const layer of candidate.layers) {
+    if (layer.parent) {
+      const parent = candidate.layers.find(item => item.id === layer.parent.id);
+      const bind = layer.parent.bind;
+      if (!parent) errors.push(`${layer.name}: missing parent.`);
+      if (!bind || !Array.isArray(bind.vertices) || !Array.isArray(bind.indices) || !bind.transform || bind.vertices.length !== parent?.mesh?.vertices?.length || bind.indices.some(i => !Number.isInteger(i) || i < 0 || i * 2 >= bind.vertices.length)) errors.push(`${layer.name}: invalid parent binding.`);
+      const seen = new Set([layer.id]);
+      let next = layer.parent.id;
+      while (next) {
+        if (seen.has(next)) { errors.push(`${layer.name}: cyclic parent hierarchy.`); break; }
+        seen.add(next);
+        next = candidate.layers.find(item => item.id === next)?.parent?.id;
+      }
+    }
+    if (layer.clipMask) {
+      const mask = candidate.layers.find(item => item.id === layer.clipMask);
+      if (!mask || mask.id === layer.id || mask.clipMask) errors.push(`${layer.name}: clipping requires another, unmasked layer.`);
+    }
+    for (const index of layer.mesh?.indices ?? []) {
+      if (!Number.isInteger(index) || index < 0 || index * 2 >= (layer.mesh?.vertices?.length ?? 0)) { errors.push(`${layer.name}: triangle index out of bounds.`); break; }
+    }
+  }
   return errors;
 }
 

@@ -1,4 +1,8 @@
+import { reviewRegions } from "./region-editor.js";
+import { bindParent, evaluateScene, sceneToLayer } from "./scene.js";
+import { PuppetMotion } from "./motion.js";
 import {
+  AUTOSAVE_KEY,
   clone,
   createLayer,
   defaultParameterValues,
@@ -12,9 +16,11 @@ import {
   validateModel,
 } from "./model.js";
 import { KokoroRenderer } from "./renderer.js";
-import { createSampleModel } from "./sample.js";
+import { createLayeredSampleModel } from "./sample.js";
+import { autoRigFile } from "./auto-rigger.js";
 
-const AUTOSAVE_KEY = "kokoro2d-maker-autosave-v1";
+const motion = new PuppetMotion({ style: "energetic" });
+
 const canvas = document.querySelector("#makerCanvas");
 const overlay = document.querySelector("#meshOverlay");
 const renderer = new KokoroRenderer(canvas);
@@ -73,6 +79,7 @@ async function restore(serialized) {
 }
 
 function changed(message = "Changes autosaved locally") {
+  state.model.version = 2;
   state.dirty = true;
   state.model.meta.modifiedAt = new Date().toISOString();
   localStorage.setItem(AUTOSAVE_KEY, snapshot());
@@ -127,6 +134,9 @@ function refreshLayerList() {
 }
 
 function refreshParameterList() {
+  if (!state.model.parameters[state.selectedParameterId]) {
+    state.selectedParameterId = Object.keys(state.model.parameters)[0];
+  }
   elements.parameterSelect.replaceChildren();
   for (const parameter of Object.values(state.model.parameters)) {
     const option = document.createElement("option");
@@ -150,6 +160,12 @@ function refreshInspector() {
   if (!layer) return;
 
   const pose = evaluateLayer(layer, state.values, state.model.parameters);
+  for (const [select, value] of [[elements.layerParent, layer.parent?.id], [elements.layerMask, layer.clipMask]]) {
+    select.replaceChildren(new Option("None", ""));
+    for (const item of state.model.layers) if (item.id !== layer.id) select.add(new Option(item.name, item.id));
+    select.value = value ?? "";
+  }
+  elements.layerMaskOnly.checked = Boolean(layer.maskOnly);
   elements.layerName.value = layer.name;
   elements.layerVisible.checked = layer.visible;
   elements.layerX.value = formatNumber(pose.transform.x);
@@ -213,16 +229,28 @@ function applyTransform(property, value) {
   changed();
 }
 
-function downloadModel() {
-  const contents = serializeModel(state.model);
-  const blob = new Blob([contents], { type: "application/vnd.kokoro2d+json" });
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
-  link.download = `${safeFilename(state.model.meta.name)}.kokoro2d`;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
-  state.dirty = false;
-  setStatus(`Exported ${link.download}`, "good");
+async function downloadModel() {
+  try {
+    const portableModel = clone(state.model);
+    await Promise.all(portableModel.layers.map(async (layer) => {
+      if (layer.source.src.startsWith("data:")) return;
+      const response = await fetch(layer.source.src);
+      if (!response.ok) throw new Error(`Unable to embed ${layer.name}.`);
+      layer.source.src = await readAsDataUrl(await response.blob());
+      layer.source.type = "embedded";
+    }));
+    const contents = serializeModel(portableModel);
+    const blob = new Blob([contents], { type: "application/vnd.kokoro2d+json" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `${safeFilename(state.model.meta.name)}.kokoro2d`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+    state.dirty = false;
+    setStatus(`Exported ${link.download}`, "good");
+  } catch (error) {
+    setStatus(`Export failed: ${error.message}`, "bad");
+  }
 }
 
 async function importFiles(files) {
@@ -282,7 +310,7 @@ function drawOverlay() {
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
   context.clearRect(0, 0, width, height);
   if (!layer || state.autoplay) return;
-  const pose = evaluateLayer(layer, state.values, state.model.parameters);
+  const pose = evaluateScene(state.model, state.values).get(layer.id);
   const points = [];
   for (let index = 0; index < pose.vertices.length; index += 2) {
     const world = renderer.localToWorld(pose.vertices[index], pose.vertices[index + 1], pose.transform);
@@ -314,7 +342,7 @@ function nearestVertex(clientX, clientY) {
   if (!layer) return null;
   const rect = overlay.getBoundingClientRect();
   const pointer = { x: clientX - rect.left, y: clientY - rect.top };
-  const pose = evaluateLayer(layer, state.values, state.model.parameters);
+  const pose = evaluateScene(state.model, state.values).get(layer.id);
   let best = null;
   for (let index = 0; index < pose.vertices.length; index += 2) {
     const world = renderer.localToWorld(pose.vertices[index], pose.vertices[index + 1], pose.transform);
@@ -329,18 +357,8 @@ function nearestVertex(clientX, clientY) {
 
 function animate(timeMs) {
   if (state.model) {
-    if (state.autoplay) {
-      const time = timeMs / 1000;
-      state.values["head.yaw"] = Math.sin(time * 0.65) * 0.7;
-      state.values["head.pitch"] = Math.sin(time * 0.93) * 0.22;
-      state.values["head.roll"] = Math.sin(time * 0.47) * 0.18;
-      state.values["body.sway"] = Math.sin(time * 0.5) * 0.52;
-      state.values["hair.motion"] = Math.sin(time * 0.72 - 0.7) * 0.8;
-      state.values["eyes.lookX"] = Math.sin(time * 0.41) * 0.45;
-      state.values["mouth.open"] = (Math.sin(time * 8) * 0.5 + 0.5) * 0.55;
-      const blinkPhase = time % 3.7;
-      state.values["eyes.blink"] = blinkPhase > 3.48 ? Math.sin((blinkPhase - 3.48) / 0.22 * Math.PI) : 0;
-    }
+    const pose = motion.update(timeMs, state.model, { active: state.autoplay });
+    if (state.autoplay) Object.assign(state.values, pose);
     renderer.render(state.values);
     drawOverlay();
   }
@@ -401,6 +419,28 @@ elements.layerVisible.addEventListener("change", () => {
   changed();
 });
 
+for (const [element, property] of [[elements.layerParent, 'parent'], [elements.layerMask, 'clipMask']]) {
+  element.addEventListener('change', () => {
+    const layer = selectedLayer();
+    if (!layer) return;
+    const previous = structuredClone(layer[property]);
+    if (property === 'parent' && element.value) bindParent(layer, state.model.layers.find(item => item.id === element.value));
+    else if (element.value) layer[property] = element.value;
+    else delete layer[property];
+    const errors = validateModel(state.model);
+    if (errors.length) { if (previous === undefined) delete layer[property]; else layer[property] = previous; refreshInspector(); setStatus(errors.join(' '), 'bad'); return; }
+    const next = structuredClone(layer[property]);
+    if (previous === undefined) delete layer[property]; else layer[property] = previous;
+    checkpoint();
+    if (next === undefined) delete layer[property]; else layer[property] = next;
+    changed('Layer relationship updated');
+  });
+}
+elements.layerMaskOnly.addEventListener('change', () => {
+  const layer = selectedLayer(); if (!layer) return;
+  checkpoint(); layer.maskOnly = elements.layerMaskOnly.checked; changed('Layer display updated');
+});
+
 elements.addLayers.addEventListener("click", () => elements.layerFiles.click());
 elements.layerFiles.addEventListener("change", async () => {
   await importFiles(elements.layerFiles.files);
@@ -409,6 +449,10 @@ elements.layerFiles.addEventListener("change", async () => {
 elements.deleteLayer.addEventListener("click", async () => {
   const layer = selectedLayer();
   if (!layer) return;
+  if (state.model.layers.some(item => item.parent?.id === layer.id || item.clipMask === layer.id)) {
+    setStatus("Detach child layers and clipping masks before deleting this layer.", "bad");
+    return;
+  }
   checkpoint();
   state.model.layers = state.model.layers.filter((candidate) => candidate.id !== layer.id);
   state.model.layers.forEach((candidate, index) => { candidate.zIndex = index; });
@@ -454,9 +498,102 @@ elements.modelFile.addEventListener("change", async () => {
     elements.modelFile.value = "";
   }
 });
+
+let autoRigPreviewUrl = null;
+
+function updateAutoRigProgress(message, progress) {
+  elements.autoRigProgress.hidden = false;
+  elements.autoRigProgressText.textContent = message;
+  elements.autoRigProgressBar.style.width = `${Math.round(progress * 100)}%`;
+}
+
+async function runAutoRig(file) {
+  if (!file || elements.autoRigInput.disabled) return;
+  if (state.dirty && !confirm("Replace the current model with this auto-rig? Your autosave will be replaced.")) return;
+  if (autoRigPreviewUrl) URL.revokeObjectURL(autoRigPreviewUrl);
+  autoRigPreviewUrl = URL.createObjectURL(file);
+  elements.autoRigPreview.src = autoRigPreviewUrl;
+  elements.autoRigPreview.hidden = false;
+  elements.autoRigDropCopy.hidden = true;
+  elements.autoRigReport.hidden = true;
+  elements.autoRigWarnings.replaceChildren();
+  const faceOnly = elements.autoRigFaceOnly.checked;
+  elements.autoRigFaceOnly.disabled = true;
+  elements.autoRigInput.disabled = true;
+  updateAutoRigProgress("Waking up the pixel goblins", 0.02);
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  elements.autoRigDialog.addEventListener('close', abort, { once: true });
+
+  try {
+    const { model, report } = await autoRigFile(file, { faceOnly, signal: controller.signal, onProgress: updateAutoRigProgress, review: prepared => reviewRegions(elements.autoRigDialog, prepared) });
+    await loadModel(model, `Auto-rigged ${model.meta.name}`);
+    state.dirty = true;
+    elements.autoRigConfidence.textContent = `${Math.round(report.confidence * 100)}%`;
+    elements.autoRigResultTitle.textContent = `${model.meta.name} is alive`;
+    elements.autoRigResultStats.textContent = `${report.sourceSize} source · ${report.meshVertices} mesh points · ${report.keyforms} authored keyforms · ${report.backgroundMode} · ${report.landmarkMethod}`;
+    const warnings = report.warnings.length
+      ? report.warnings
+      : ["No major uncertainty detected. Still inspect the blink and mouth because pixels are sneaky."];
+    for (const warning of warnings) {
+      const item = document.createElement("li");
+      item.textContent = warning;
+      elements.autoRigWarnings.append(item);
+    }
+    elements.autoRigReport.hidden = false;
+    setStatus(`${faceOnly ? 'Blink and talking rig' : 'Full auto-rig'} complete: ${Math.round(report.confidence * 100)}% confidence`, "good");
+  } catch (error) {
+    if (controller.signal.aborted || error.message === 'Rig creation cancelled.') {
+      setStatus('Rig creation cancelled; current model kept');
+      return;
+    }
+    console.error(error);
+    elements.autoRigResultTitle.textContent = "The ritual encountered a problem";
+    elements.autoRigResultStats.textContent = error.message;
+    elements.autoRigConfidence.textContent = "×";
+    elements.autoRigReport.hidden = false;
+    setStatus(`Auto-rig failed: ${error.message}`, "bad");
+  } finally {
+    elements.autoRigDialog.removeEventListener("close", abort);
+    elements.autoRigInput.disabled = false;
+    elements.autoRigFaceOnly.disabled = false;
+  }
+}
+
+elements.autoRigButton.addEventListener("click", () => {
+  elements.autoRigDialog.showModal();
+});
+elements.autoRigInput.addEventListener("change", async () => {
+  await runAutoRig(elements.autoRigInput.files[0]);
+  elements.autoRigInput.value = "";
+});
+for (const eventName of ["dragenter", "dragover"]) {
+  elements.autoRigDrop.addEventListener(eventName, (event) => {
+    event.preventDefault();
+    elements.autoRigDrop.classList.add("dragging");
+  });
+}
+for (const eventName of ["dragleave", "drop"]) {
+  elements.autoRigDrop.addEventListener(eventName, (event) => {
+    event.preventDefault();
+    elements.autoRigDrop.classList.remove("dragging");
+  });
+}
+elements.autoRigDrop.addEventListener("drop", async (event) => {
+  await runAutoRig([...event.dataTransfer.files].find((file) => file.type.startsWith("image/")));
+});
+elements.autoRigDialog.addEventListener("close", () => {
+  if (autoRigPreviewUrl) URL.revokeObjectURL(autoRigPreviewUrl);
+  autoRigPreviewUrl = null;
+  elements.autoRigPreview.removeAttribute("src");
+  elements.autoRigPreview.hidden = true;
+  elements.autoRigDropCopy.hidden = false;
+  elements.autoRigProgress.hidden = true;
+  elements.autoRigReport.hidden = true;
+});
 elements.newSample.addEventListener("click", async () => {
   if (state.dirty && !confirm("Replace the current model with a fresh sample?")) return;
-  await loadModel(createSampleModel(), "Fresh sample created");
+  await loadModel(await createLayeredSampleModel(), "Fresh sample created");
 });
 elements.togglePreview.addEventListener("click", () => {
   state.autoplay = !state.autoplay;
@@ -498,8 +635,8 @@ overlay.addEventListener("pointermove", (event) => {
   const layer = selectedLayer();
   const rect = overlay.getBoundingClientRect();
   const world = renderer.screenToWorld(event.clientX - rect.left, event.clientY - rect.top);
-  const pose = evaluateLayer(layer, state.values, state.model.parameters);
-  const local = renderer.worldToLocal(world.x, world.y, pose.transform);
+  const [localX, localY] = sceneToLayer(layer, world.x, world.y, state.model, state.values);
+  const local = { x: localX, y: localY };
   const valueIndex = state.drag.vertexIndex * 2;
   const key = activeKeyform(layer);
   if (key) {
@@ -543,12 +680,12 @@ async function boot() {
       state.selectedLayerId = saved.selectedLayerId;
       refreshAll();
     } else {
-      await loadModel(createSampleModel(), "Sample puppet ready");
+      await loadModel(await createLayeredSampleModel(), "Sample puppet ready");
     }
   } catch (error) {
     console.error(error);
     localStorage.removeItem(AUTOSAVE_KEY);
-    await loadModel(createSampleModel(), "Autosave was invalid; loaded sample");
+    await loadModel(await createLayeredSampleModel(), "Autosave was invalid; loaded sample");
   }
   state.dirty = false;
   requestAnimationFrame(animate);
