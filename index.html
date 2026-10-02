@@ -60,7 +60,7 @@
       </div>
       <div class="statusbar">
         <span class="status-dot"></span><span id="statusText">Starting Kokoro2D…</span>
-        <span class="format-label">WebGL2 · schema v1</span>
+        <span class="format-label">WebGL2 · schema v2</span>
       </div>
     </section>
 
@@ -86,6 +86,9 @@
         <div id="layerInspector">
           <label>Layer name<input id="layerName" type="text"></label>
           <label class="checkbox"><input id="layerVisible" type="checkbox"> Visible</label>
+          <label>Parent deformer<select id="layerParent"></select></label>
+          <label>Clip to layer<select id="layerMask"></select></label>
+          <label class="checkbox"><input id="layerMaskOnly" type="checkbox"> Deformer / mask only</label>
           <div class="property-grid">
             <label>X<input id="layerX" type="number" step="1"></label>
             <label>Y<input id="layerY" type="number" step="1"></label>
@@ -113,6 +116,9 @@
         <button id="autoRigClose" class="dialog-close" value="cancel" aria-label="Close" type="submit">×</button>
       </div>
       <p class="dialog-copy">Give her one front-facing anime PNG. Kokoro2D will remove the background, find her face, rebuild movable features, generate meshes, and author a starter rig locally in your browser.</p>
+
+      <label class="checkbox"><input id="autoRigFaceOnly" type="checkbox"> Blink and talking only</label>
+      <p class="hint">Check before choosing an image to keep the head, body, and hair still.</p>
 
       <label id="autoRigDrop" class="auto-rig-drop">
         <input id="autoRigInput" type="file" accept="image/png,image/webp,image/jpeg" hidden>

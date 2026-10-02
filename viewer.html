@@ -15,6 +15,7 @@
     </a>
     <div class="toolbar">
       <button id="openModel" class="primary" type="button">Load .kokoro2d</button>
+      <button id="loadSample" type="button" hidden>Bundled sample</button>
       <a class="button" href="./index.html">← Maker</a>
       <input id="viewerFile" type="file" accept=".kokoro2d,application/json" hidden>
     </div>
@@ -27,6 +28,7 @@
         <span class="eyebrow">Now rendering</span>
         <h1 id="puppetTitle">Kokoro-chan</h1>
         <p id="puppetByline">by Kokoro2D</p>
+        <p class="hint">Drop a .kokoro2d file here to play it.</p>
       </div>
       <div class="viewer-status"><span class="status-dot"></span><span id="viewerStatus">Loading…</span></div>
     </section>
@@ -34,8 +36,36 @@
     <aside class="viewer-sidebar panel">
       <h2>Performance</h2>
       <label class="checkbox switch-line"><input id="demoMode" type="checkbox" checked> Procedural performance</label>
+      <label class="style-line">Motion style<select id="motionStyle"></select></label>
+      <label class="checkbox"><input id="previewTalking" type="checkbox"> Preview talking (no audio)</label>
       <button id="enableMic" type="button">Enable microphone lip sync</button>
-      <p class="hint">Move the pointer over the character to direct her gaze. Touch any slider to pause the procedural demo.</p>
+      <div class="speak-line">
+        <textarea id="speakText" aria-label="Text to speak" rows="2" placeholder="Type a line for her to say…">Hello, how are you doing today?</textarea>
+        <label class="checkbox"><input id="speechGestures" type="checkbox" checked> Speech gestures</label>
+        <div class="speak-buttons">
+          <button id="speakButton" type="button">Speak it</button>
+          <button id="speakStop" type="button">Stop</button>
+        </div>
+        <output id="speakStatus" class="hint" aria-live="polite"></output>
+        <p class="hint">Nods and question tilts follow your words. Ctrl/⌘ + Enter to speak. Browser speech audio is not included in recordings.</p>
+      </div>
+      <div class="record-line">
+        <button id="recordButton" type="button">⏺ Record WebM</button>
+        <output id="recordStatus" class="hint"></output>
+      </div>
+      <p class="hint">Move the pointer over the character to direct her gaze; leave it still and she looks around on her own. Touch any slider to pause the procedural demo.</p>
+      <h3 class="expression-title">Expression</h3>
+      <div id="expressionRow" class="expression-row"></div>
+      <details id="tuner" class="tuner">
+        <summary>Tune the motion by eye</summary>
+        <p class="hint">Drag while watching her, not while reading the numbers. <strong>Copy values</strong> puts the result on the clipboard, ready to paste into <code>STYLES</code> in <code>src/motion.js</code>.</p>
+        <div id="tunerControls"></div>
+        <div class="tuner-actions">
+          <button id="tunerCopy" type="button">Copy values</button>
+          <button id="tunerReset" type="button">Reset</button>
+        </div>
+        <output id="tunerStatus" class="hint"></output>
+      </details>
       <div id="viewerControls" class="viewer-controls"></div>
     </aside>
   </main>

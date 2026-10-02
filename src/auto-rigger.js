@@ -1,4 +1,34 @@
-import { createLayer, createModel, ensureKeyform } from "./model.js";
+import { applyAnimeLandmarks, detectAnimeLandmarks } from "./anime-landmarks.js";
+import { addRegionContours } from "./region-geometry.js";
+import { buildLayeredRig, defaultRegions, fitRegions } from "./layered-rig.js";
+
+// Every ratio below differs by drawing style, and no single set serves both.
+// An anime face has eyes about a fifth of its height set close together, with a
+// small mouth close under them; a realistically drawn one has eyes a third that
+// size, prominent brows, and a mouth nearly twice as wide sitting nearly twice
+// as far down. Multipliers with two entries are [after a neck cut, without one].
+export const PROPORTIONS = Object.freeze({
+  anime: Object.freeze({
+    label: 'Anime',
+    faceWidth: [0.82, 1.25], faceHeight: [0.86, 1.22],
+    eyeWindow: [0.30, 0.14],       // search window, as a share of the face box
+    eyeBand: [0.26, 0.36],         // band top and height, share of face height
+    eyeSize: [0.55, 0.37],         // final rectangle, share of interocular
+    mouthDrop: 0.33,               // band top below the eye line, x interocular
+    mouthBand: [0.5, 0.60],        // band width and height, x interocular
+    mouthSize: [0.28, 0.15],       // final rectangle, x interocular
+  }),
+  realistic: Object.freeze({
+    label: 'Realistic',
+    faceWidth: [0.86, 1.25], faceHeight: [0.9, 1.22],
+    eyeWindow: [0.24, 0.11],
+    eyeBand: [0.34, 0.3],
+    eyeSize: [0.5, 0.23],
+    mouthDrop: 0.72,
+    mouthBand: [0.72, 0.36],
+    mouthSize: [0.55, 0.17],
+  }),
+});
 
 const MAX_ANALYSIS_SIDE = 1400;
 const MASK_THRESHOLD = 24;
@@ -24,10 +54,18 @@ function borderPalette(imageData) {
     [0, 0], [width - 1, 0], [0, height - 1], [width - 1, height - 1],
     [Math.floor(width / 2), 0], [Math.floor(width / 2), height - 1],
   ];
-  return points.map(([x, y]) => {
+  const samples = points.map(([x, y]) => {
     const offset = (y * width + x) * 4;
     return [data[offset], data[offset + 1], data[offset + 2]];
   });
+  // A cropped portrait's bottom-center sample is usually clothing. Never add
+  // each edge color to the flood palette: that erases the connected torso.
+  const clusters = samples.map(color => samples.filter(sample => colorDistance(sample, 0, color) <= 12));
+  clusters.sort((a, b) => b.length - a.length);
+  const dominant = clusters[0];
+  // Without a strict majority, keep the artwork rather than guessing which
+  // of two large border regions is the character.
+  return dominant.length > samples.length / 2 ? dominant : [];
 }
 
 function isSkin(red, green, blue) {
@@ -76,6 +114,12 @@ export function extractSubjectMask(imageData) {
   }
 
   const palette = borderPalette(imageData);
+  if (!palette.length) {
+    return { mask: new Uint8ClampedArray(pixelCount).fill(255), mode: "full image fallback", confidence: 0.28 };
+  }
+  // Protect pale skin near a light background even when its color falls within
+  // the flood tolerance, unless the background is itself skin-toned.
+  const borderIsSkin = palette.some((color) => isSkin(color[0], color[1], color[2]));
   const background = new Uint8Array(pixelCount);
   const queue = new Int32Array(pixelCount);
   let head = 0;
@@ -83,8 +127,10 @@ export function extractSubjectMask(imageData) {
   const enqueue = (index) => {
     if (background[index]) return;
     const offset = index * 4;
+    if (!borderIsSkin && isSkin(data[offset], data[offset + 1], data[offset + 2])) return;
     const distance = Math.min(...palette.map((color) => colorDistance(data, offset, color)));
-    if (distance > 48) return;
+    // A broad tolerance eats pale anime clothes even with the right palette.
+    if (distance > 18) return;
     background[index] = 1;
     queue[tail++] = index;
   };
@@ -121,7 +167,7 @@ export function extractSubjectMask(imageData) {
   return {
     mask: softenMask(mask, width, height),
     mode: "border background extraction",
-    confidence: clamp(1 - Math.abs(ratio - 0.48) * 0.75, 0.48, 0.88),
+    confidence: clamp(1 - Math.abs(ratio - 0.48) * 0.75, 0.48, 0.88) * palette.length / 6,
   };
 }
 
@@ -163,7 +209,9 @@ function skinBounds(imageData, subjectMask, subjectBounds) {
   }
 
   const queue = new Int32Array(width * height);
+  const labels = new Int32Array(width * height).fill(-1);
   let best = null;
+  let componentId = 0;
   for (let y = Math.floor(subjectBounds.y); y <= searchBottom; y += 1) {
     for (let x = Math.floor(subjectBounds.x); x < subjectBounds.x + subjectBounds.width; x += 1) {
       const seed = y * width + x;
@@ -172,7 +220,10 @@ function skinBounds(imageData, subjectMask, subjectBounds) {
       let tail = 0;
       queue[tail++] = seed;
       candidates[seed] = 2;
+      const id = componentId++;
+      labels[seed] = id;
       const component = {
+        id,
         count: 0, sumX: 0, sumY: 0,
         minimumX: width, minimumY: height, maximumX: -1, maximumY: -1,
       };
@@ -193,6 +244,7 @@ function skinBounds(imageData, subjectMask, subjectBounds) {
           const neighborX = neighbor % width;
           if (Math.abs(neighborX - pixelX) > 1) continue;
           candidates[neighbor] = 2;
+          labels[neighbor] = id;
           queue[tail++] = neighbor;
         }
       }
@@ -201,37 +253,142 @@ function skinBounds(imageData, subjectMask, subjectBounds) {
       const centerX = component.sumX / component.count;
       const centerY = component.sumY / component.count;
       const horizontalCentering = clamp(1 - Math.abs(centerX - (subjectBounds.x + subjectBounds.width / 2)) / subjectBounds.width, 0.35, 1);
-      const upperWeight = clamp(1.35 - (centerY - subjectBounds.y) / subjectBounds.height, 0.4, 1.25);
+      // A head is the topmost skin in a portrait. When a choker or collar cuts
+      // the face off from the body, the bare chest and arms form a much larger
+      // component, and raw pixel count let that outvote a face several times
+      // smaller. Rank by where the region starts, with size only as a tiebreak.
+      const topFraction = (component.minimumY - subjectBounds.y) / Math.max(1, subjectBounds.height);
+      const headliness = clamp(1 - topFraction / 0.45, 0.04, 1);
       const aspect = componentWidth / Math.max(1, componentHeight);
       const aspectWeight = aspect >= 0.45 && aspect <= 1.8 ? 1 : 0.45;
-      component.score = component.count * horizontalCentering * upperWeight * aspectWeight;
+      component.score = Math.sqrt(component.count) * horizontalCentering * headliness * aspectWeight;
       if (!best || component.score > best.score) best = component;
     }
   }
-  return best ?? {
-    count: 0, sumX: 0, sumY: 0,
-    minimumX: width, minimumY: height, maximumX: -1, maximumY: -1,
-  };
+  if (!best) {
+    return {
+      count: 0, sumX: 0, sumY: 0,
+      minimumX: width, minimumY: height, maximumX: -1, maximumY: -1, rows: [],
+    };
+  }
+  best.rows = rowProfile(labels, best, width);
+  return best;
 }
 
-export function estimateFace(imageData, subjectMask, subjectBounds) {
-  const skin = skinBounds(imageData, subjectMask, subjectBounds);
+// Horizontal extent of the chosen skin region on every row it occupies.
+function rowProfile(labels, component, width) {
+  const rows = [];
+  for (let y = component.minimumY; y <= component.maximumY; y += 1) {
+    let minimum = -1;
+    let maximum = -1;
+    let count = 0;
+    let sumX = 0;
+    for (let x = component.minimumX; x <= component.maximumX; x += 1) {
+      if (labels[y * width + x] !== component.id) continue;
+      if (minimum < 0) minimum = x;
+      maximum = x;
+      count += 1;
+      sumX += x;
+    }
+    rows.push({ y, minimum, maximum, count, sumX, span: maximum < 0 ? 0 : maximum - minimum + 1 });
+  }
+  return rows;
+}
+
+// Exposed skin joins the face to the body through the neck, so the largest skin
+// component is usually the whole character. The neck is the first row narrow
+// enough to be a constriction that the body widens out of again; everything
+// above it is the head. Returns -1 when no neck is visible, as in a bust crop
+// or when hair covers the throat.
+function neckRow(rows) {
+  if (rows.length < 12) return -1;
+  const above = new Array(rows.length).fill(0);
+  const below = new Array(rows.length).fill(0);
+  for (let i = 1; i < rows.length; i += 1) above[i] = Math.max(above[i - 1], rows[i - 1].span);
+  for (let i = rows.length - 2; i >= 0; i -= 1) below[i] = Math.max(below[i + 1], rows[i + 1].span);
+  for (let i = 4; i < rows.length - 4; i += 1) {
+    if (above[i] < 10) continue;
+    if (rows[i].span > above[i] * 0.55) continue;
+    if (below[i] < above[i] * 0.8) continue;
+    return i;
+  }
+  return -1;
+}
+
+function headAbove(rows, cut, taper) {
+  let widest = 0;
+  for (let i = 0; i < cut; i += 1) widest = Math.max(widest, rows[i].span);
+  // Only fall back to the width taper when no neck was visible. A found neck
+  // already marks where the head ends; trimming further on top of it ate the
+  // lower jaw of a realistically drawn face and took the mouth with it.
+  let chin = cut - 1;
+  while (taper && chin > 0 && rows[chin].span < widest * 0.55) chin -= 1;
+  const head = { count: 0, sumX: 0, sumY: 0, minimumX: Infinity, minimumY: Infinity, maximumX: -1, maximumY: -1 };
+  const spans = [];
+  for (let i = 0; i <= chin; i += 1) {
+    const row = rows[i];
+    if (!row.span) continue;
+    head.count += row.count;
+    head.sumX += row.sumX;
+    head.sumY += row.count * row.y;
+    head.minimumX = Math.min(head.minimumX, row.minimum);
+    head.maximumX = Math.max(head.maximumX, row.maximum);
+    head.minimumY = Math.min(head.minimumY, row.y);
+    head.maximumY = Math.max(head.maximumY, row.y);
+    spans.push(row.span);
+  }
+  // A high percentile rather than the extreme, so one ear or a raised hand
+  // touching the cheek cannot widen the whole face.
+  spans.sort((a, b) => a - b);
+  head.spanWidth = spans[Math.floor(spans.length * 0.75)] ?? 0;
+  return head.count ? head : null;
+}
+
+export function estimateFace(imageData, subjectMask, subjectBounds, proportions = PROPORTIONS.anime) {
+  const component = skinBounds(imageData, subjectMask, subjectBounds);
+  const rows = component.rows ?? [];
+  const cut = neckRow(rows);
+  // Trim to the chin either way. A full neck constriction is only visible when
+  // the throat is bare; behind a collar the region still runs past the jaw, and
+  // the jaw narrowing is the part that matters.
+  const skin = (rows.length ? headAbove(rows, cut >= 0 ? cut : rows.length, cut < 0) : null) || component;
   const subjectArea = subjectBounds.width * subjectBounds.height;
-  const usableSkin = skin.count > subjectArea * 0.018;
+  const usableSkin = skin.count > subjectArea * 0.004;
   if (usableSkin) {
     const centerX = skin.sumX / skin.count;
     const centerY = skin.sumY / skin.count;
-    const skinWidth = skin.maximumX - skin.minimumX + 1;
+    const skinWidth = skin.spanWidth || (skin.maximumX - skin.minimumX + 1);
     const skinHeight = skin.maximumY - skin.minimumY + 1;
-    const faceWidth = clamp(skinWidth * 1.12, subjectBounds.width * 0.28, subjectBounds.width * 0.68);
-    const faceHeight = clamp(skinHeight * 1.08, faceWidth * 0.82, faceWidth * 1.35);
+    // The two paths measure different things. After a neck cut the region is the
+    // whole head's skin - jaw, cheeks, the lot - and the face sits inside it.
+    // With no cut it is usually the facial patch already enclosed by hair, which
+    // needs widening rather than shrinking.
+    const pick = (pair) => (cut >= 0 ? pair[0] : pair[1]);
+    const faceWidth = clamp(skinWidth * pick(proportions.faceWidth), subjectBounds.width * 0.14, subjectBounds.width * 0.68);
+    const faceHeight = clamp(skinHeight * pick(proportions.faceHeight), faceWidth * 0.82, faceWidth * 1.45);
+    // Anchor the box on the chin rather than on the centroid. The chin is the
+    // one landmark actually measured here - it is where the skin stops above
+    // the neck - and everything below the eyes is placed relative to it. A box
+    // floated on the centroid instead lands short on a face whose jaw tapers,
+    // taking the mouth outside the face entirely.
+    const chin = clamp(skin.maximumY + skinHeight * 0.04, subjectBounds.y + faceHeight, subjectBounds.y + subjectBounds.height);
+    // Report what the estimate is actually worth. Density alone rated the old
+    // whole-body box at 0.89: a blob that fills its own bounding box densely is
+    // not evidence that the blob was a face.
+    const density = clamp(skin.count / (faceWidth * faceHeight) * 1.6, 0, 1);
+    const proportion = faceHeight / subjectBounds.height;
+    const plausible = proportion >= 0.09 && proportion <= 0.62 ? 1 : 0.3;
+    const bounded = faceWidth === subjectBounds.width * 0.68 || faceWidth === subjectBounds.width * 0.14 ? 0.55 : 1;
     return {
       x: clamp(centerX - faceWidth / 2, subjectBounds.x, subjectBounds.x + subjectBounds.width - faceWidth),
-      y: clamp(centerY - faceHeight * 0.48, subjectBounds.y, subjectBounds.y + subjectBounds.height * 0.58),
+      y: clamp(chin - faceHeight, subjectBounds.y, subjectBounds.y + subjectBounds.height * 0.58),
       width: faceWidth,
       height: faceHeight,
-      confidence: clamp(skin.count / (faceWidth * faceHeight) * 1.6, 0.42, 0.9),
-      method: "skin-region estimate",
+      // No penalty for having found the face without a visible neck: measured
+      // across 30 variants, that path is not less accurate, and docking it made
+      // every calibration figure worse.
+      confidence: clamp(density * plausible * bounded, 0.15, 0.92),
+      method: cut >= 0 ? "head isolated above the neck" : "skin-region estimate",
     };
   }
   const width = subjectBounds.width * 0.48;
@@ -246,110 +403,326 @@ export function estimateFace(imageData, subjectMask, subjectBounds) {
   };
 }
 
-function weightedFeatureCenter(imageData, subjectMask, bounds, scoring, fallbackX, fallbackY) {
+// Where is the densest patch of feature-coloured pixels? A centroid over the
+// whole search band drifts outward toward scattered dark pixels - stray hair on
+// a cheek, a shadow - which pushed the eye centres apart and the boxes with
+// them. Sliding a window the size of the expected feature and taking the
+// strongest response finds the cluster instead of averaging over the noise.
+function densestWindow(imageData, subjectMask, bounds, scoring, windowWidth, windowHeight, fallbackX, fallbackY, support = null, candidateCount = 1) {
   const { width, height, data } = imageData;
   const startX = clamp(Math.floor(bounds.x), 0, width - 1);
   const endX = clamp(Math.ceil(bounds.x + bounds.width), 0, width);
   const startY = clamp(Math.floor(bounds.y), 0, height - 1);
   const endY = clamp(Math.ceil(bounds.y + bounds.height), 0, height);
-  let total = 0;
-  let sumX = 0;
-  let sumY = 0;
-  for (let y = startY; y < endY; y += 1) {
-    for (let x = startX; x < endX; x += 1) {
-      const index = y * width + x;
-      if (subjectMask[index] < 64) continue;
-      const offset = index * 4;
-      const score = scoring(data[offset], data[offset + 1], data[offset + 2]);
-      if (score <= 0) continue;
-      total += score;
-      sumX += x * score;
-      sumY += y * score;
+  const bandWidth = endX - startX;
+  const bandHeight = endY - startY;
+  const missed = { x: fallbackX, y: fallbackY, height: Math.round(windowHeight), strength: 0, confidence: 0.2 };
+  if (bandWidth < 2 || bandHeight < 2) return missed;
+
+  const stride = bandWidth + 1;
+  const integral = new Float64Array(stride * (bandHeight + 1));
+  const backing = support ? new Float64Array(stride * (bandHeight + 1)) : null;
+  for (let y = 0; y < bandHeight; y += 1) {
+    let rowSum = 0;
+    let rowSupport = 0;
+    for (let x = 0; x < bandWidth; x += 1) {
+      const index = (startY + y) * width + (startX + x);
+      let score = 0;
+      let backed = 0;
+      if (subjectMask[index] >= 64) {
+        const offset = index * 4;
+        score = Math.max(0, scoring(data[offset], data[offset + 1], data[offset + 2], startX + x, startY + y));
+        if (support) backed = Math.max(0, support(data[offset], data[offset + 1], data[offset + 2]));
+      }
+      rowSum += score;
+      integral[(y + 1) * stride + x + 1] = integral[y * stride + x + 1] + rowSum;
+      if (backing) {
+        rowSupport += backed;
+        backing[(y + 1) * stride + x + 1] = backing[y * stride + x + 1] + rowSupport;
+      }
     }
   }
-  const area = Math.max(1, (endX - startX) * (endY - startY));
-  return {
-    x: total > 0 ? sumX / total : fallbackX,
-    y: total > 0 ? sumY / total : fallbackY,
-    confidence: clamp(total / area / 65, 0.2, 0.88),
+
+  const boxWidth = Math.round(clamp(windowWidth, 2, bandWidth));
+  const boxHeight = Math.round(clamp(windowHeight, 2, bandHeight));
+  const box = (table, x, y) => table[(y + boxHeight) * stride + x + boxWidth]
+    - table[y * stride + x + boxWidth] - table[(y + boxHeight) * stride + x] + table[y * stride + x];
+  const area = boxWidth * boxHeight;
+  const score = (x, y) => {
+    let sum = box(integral, x, y);
+    // An eye holds dark and bright together - iris and sclera. An eyebrow is
+    // dark on skin with nothing bright in it, and used to win on darkness
+    // alone wherever the brows are heavier than the lashes.
+    if (backing) sum *= clamp(box(backing, x, y) / (area * 1.5), 0.05, 1);
+    return sum;
   };
+
+  // Keep separate response peaks so a strong eyebrow cannot irrevocably win
+  // before we have looked at the other eye. Four candidates bound the work.
+  const candidates = [];
+  const slackX = bandWidth - boxWidth;
+  const slackY = bandHeight - boxHeight;
+  const spread = (position, slack) => (slack > 1 ? Math.min(position, slack - position) / (slack / 2) : 1);
+  for (let rank = 0; rank < candidateCount; rank += 1) {
+    let best = 0, bestX = -1, bestY = -1;
+    for (let y = 0; y <= slackY; y += 1) {
+      for (let x = 0; x <= slackX; x += 1) {
+        const cx = startX + x + boxWidth / 2, cy = startY + y + boxHeight / 2;
+        if (candidates.some(c => Math.abs(c.windowX - cx) < boxWidth && Math.abs(c.windowY - cy) < boxHeight * 0.45)) continue;
+        const value = score(x, y);
+        if (value > best) { best = value; bestX = x; bestY = y; }
+      }
+    }
+    if (bestX < 0) break;
+    const centrality = Math.min(spread(bestX, slackX), spread(bestY, slackY));
+    // A thin lip line or small iris can fit in many equally scoring windows.
+    // Center on the actual ink rather than the first window visited.
+    let mass = 0, momentX = 0, momentY = 0;
+    for (let y = startY + bestY; y < startY + bestY + boxHeight; y += 1) {
+      for (let x = startX + bestX; x < startX + bestX + boxWidth; x += 1) {
+        const index = y * width + x, offset = index * 4;
+        if (subjectMask[index] < 64) continue;
+        const weight = Math.max(0, scoring(data[offset], data[offset + 1], data[offset + 2], x, y));
+        mass += weight; momentX += (x + 0.5) * weight; momentY += (y + 0.5) * weight;
+      }
+    }
+    candidates.push({
+      x: candidateCount > 1 || !support ? momentX / mass : startX + bestX + boxWidth / 2,
+      y: candidateCount > 1 || !support ? momentY / mass : startY + bestY + boxHeight / 2,
+      windowX: startX + bestX + boxWidth / 2,
+      windowY: startY + bestY + boxHeight / 2,
+      height: boxHeight,
+      strength: best / area,
+      confidence: clamp(best / area / 55, 0.2, 0.88) * clamp(0.6 + 0.4 * centrality, 0.6, 1)
+        + clamp(centrality * 0.22, 0, 0.22),
+    });
+  }
+  return candidates.length ? { ...candidates[0], candidates } : { ...missed, candidates: [missed] };
 }
 
-export function estimateFeatures(imageData, subjectMask, face) {
+export function estimateFeatures(imageData, subjectMask, face, proportions = PROPORTIONS.anime) {
+  const { width, data } = imageData;
+  const reach = Math.max(2, Math.round(face.width * 0.05));
+  const skinAt = (x, y) => {
+    const offset = (clamp(y, 0, imageData.height - 1) * width + clamp(x, 0, width - 1)) * 4;
+    return isSkin(data[offset], data[offset + 1], data[offset + 2]);
+  };
+  const skinBeside = (x, y) => skinAt(x - reach, y) || skinAt(x + reach, y);
+  // A mouth is a horizontal feature sitting in skin, so there is face above it
+  // and below it. A lock of hair crossing the cheek has skin either side but
+  // hair above and below, which is what kept winning the mouth band.
+  const skinAboveAndBelow = (x, y, span) => skinAt(x, y - span) && skinAt(x, y + span);
+  // Anime proportions: the eyes sit near the vertical middle of the head, not
+  // in its upper third the way a photographic face does.
+  // How bright is this character's skin? The sclera is what sits above it, and
+  // that level differs enormously between a pale flat illustration and a
+  // shaded anime face, so measure it rather than assuming a threshold.
+  let skinTotal = 0;
+  let skinCount = 0;
+  for (let y = Math.max(0, Math.floor(face.y)); y < Math.min(imageData.height, face.y + face.height); y += 2) {
+    for (let x = Math.max(0, Math.floor(face.x)); x < Math.min(width, face.x + face.width); x += 2) {
+      const offset = (y * width + x) * 4;
+      if (!isSkin(data[offset], data[offset + 1], data[offset + 2])) continue;
+      skinTotal += luminance(data[offset], data[offset + 1], data[offset + 2]);
+      skinCount += 1;
+    }
+  }
+  const skinLevel = skinCount ? skinTotal / skinCount : 200;
+  const scleraScore = (red, green, blue) => Math.max(0, luminance(red, green, blue) - (skinLevel + 8));
+
   const eyeBand = {
     x: face.x + face.width * 0.06,
-    y: face.y + face.height * 0.2,
+    y: face.y + face.height * proportions.eyeBand[0],
     width: face.width * 0.88,
-    height: face.height * 0.38,
+    height: face.height * proportions.eyeBand[1],
   };
-  const darkScore = (red, green, blue) => Math.max(0, 150 - luminance(red, green, blue));
+  // Bangs are dark too, and there is a lot more of them than there is eyelash.
+  // An eye has skin immediately beside it; a curtain of hair does not.
+  const darkScore = (red, green, blue, x, y) =>
+    skinBeside(x, y) ? Math.max(0, 150 - luminance(red, green, blue)) : 0;
   const leftSearch = { ...eyeBand, width: eyeBand.width * 0.48 };
   const rightSearch = {
     ...eyeBand,
     x: eyeBand.x + eyeBand.width * 0.52,
     width: eyeBand.width * 0.48,
   };
-  const leftCenter = weightedFeatureCenter(
-    imageData, subjectMask, leftSearch, darkScore,
-    face.x + face.width * 0.3, face.y + face.height * 0.4,
+  const eyeWidth = face.width * proportions.eyeWindow[0];
+  const eyeHeight = face.height * proportions.eyeWindow[1];
+  const leftResponse = densestWindow(
+    imageData, subjectMask, leftSearch, darkScore, eyeWidth, eyeHeight,
+    face.x + face.width * 0.3, face.y + face.height * 0.45, scleraScore, proportions === PROPORTIONS.anime ? 4 : 1,
   );
-  const rightCenter = weightedFeatureCenter(
-    imageData, subjectMask, rightSearch, darkScore,
-    face.x + face.width * 0.7, face.y + face.height * 0.4,
+  const rightResponse = densestWindow(
+    imageData, subjectMask, rightSearch, darkScore, eyeWidth, eyeHeight,
+    face.x + face.width * 0.7, face.y + face.height * 0.45, scleraScore, proportions === PROPORTIONS.anime ? 4 : 1,
   );
-
+  let leftCenter = leftResponse, rightCenter = rightResponse;
+  let pairScore = -Infinity;
+  for (const left of leftResponse.candidates ?? [leftResponse]) {
+    for (const right of rightResponse.candidates ?? [rightResponse]) {
+      const spacing = right.x - left.x;
+      if (spacing <= 0) continue;
+      // Allow a tilted face, but penalize pairing an eyebrow with an eye.
+      const tilt = Math.max(0, Math.abs(right.y - left.y) / spacing - 0.18);
+      const drift = Math.abs((left.x + right.x) / 2 - face.x - face.width / 2) / face.width;
+      const geometry = Math.exp(-80 * tilt * tilt - 3 * drift * drift);
+      const evidence = Math.sqrt(left.strength * right.strength);
+      const value = evidence * geometry;
+      if (value > pairScore) { pairScore = value; leftCenter = left; rightCenter = right; }
+    }
+  }
+  // Everything below is anchored on the eye pair rather than the face box. The
+  // distance between the eyes is a stable fraction of an anime face, while the
+  // skin region the box came from runs past the jaw whenever a collar or a bare
+  // neck extends it - which is what used to put the mouth on the choker.
+  const eyeMidX = (leftCenter.x + rightCenter.x) / 2;
+  const eyeMidY = (leftCenter.y + rightCenter.y) / 2;
+  const interocular = clamp(rightCenter.x - leftCenter.x, face.width * 0.3, face.width * 1.1);
+  // A mouth sits about half an interocular distance below the eye line, on the
+  // midline. Blush is red too, but it is out on the cheeks.
   const mouthSearch = {
-    x: face.x + face.width * 0.22,
-    y: face.y + face.height * 0.57,
-    width: face.width * 0.56,
-    height: face.height * 0.27,
+    x: eyeMidX - interocular * proportions.mouthBand[0] / 2,
+    y: eyeMidY + interocular * proportions.mouthDrop,
+    width: interocular * proportions.mouthBand[0],
+    height: interocular * proportions.mouthBand[1],
   };
-  const mouthScore = (red, green, blue) => {
+  // Accept dark reddish lips and neutral ink, but reject cool-colored hair.
+  // Blush covers much more area than a mouth, so retain the brightness gate
+  // and require skin above and below the stroke.
+  const mouthReach = Math.max(3, Math.round(interocular * 0.16));
+  const mouthScore = (red, green, blue, x, y) => {
+    const light = luminance(red, green, blue);
+    // Anime lips are often a neutral ink stroke, with no red pigment at all.
+    const neutralInk = Math.max(red, green, blue) - Math.min(red, green, blue) < 28 && light < 125;
+    if ((!neutralInk && red <= blue * 1.15) || light > 165) return 0;
+    if (!skinBeside(x, y) || !skinAboveAndBelow(x, y, mouthReach)) return 0;
     const redness = red - (green + blue) * 0.5;
-    return Math.max(0, redness * 1.5 + (125 - luminance(red, green, blue)) * 0.35);
+    const ink = neutralInk ? (125 - light) * 0.65 : redness * 1.5 + (125 - light) * 0.2;
+    // A cheek mark can be darker than the lips. Favor evidence near the eye
+    // midline, without forbidding an off-center or asymmetric expression.
+    const offset = (x - eyeMidX) / Math.max(1, interocular * 0.3);
+    const vertical = (y - eyeMidY - interocular * (proportions.mouthDrop + 0.18)) / Math.max(1, interocular * 0.22);
+    return Math.max(0, ink) * Math.exp(-offset * offset - vertical * vertical);
   };
-  const mouthCenter = weightedFeatureCenter(
-    imageData, subjectMask, mouthSearch, mouthScore,
+  const mouthWidth = interocular * proportions.mouthSize[0];
+  const mouthHeight = interocular * proportions.mouthSize[1];
+  const mouthCenter = densestWindow(
+    imageData, subjectMask, mouthSearch, mouthScore, mouthWidth, mouthHeight,
     face.x + face.width * 0.5, face.y + face.height * 0.7,
   );
 
-  const eyeWidth = face.width * 0.34;
-  const eyeHeight = face.height * 0.18;
-  const mouthWidth = face.width * 0.38;
-  const mouthHeight = face.height * 0.17;
   const rectangle = (center, width, height) => ({
     x: center.x - width / 2,
     y: center.y - height / 2,
     width,
     height,
   });
+  // The search window had to be sized from the face box, but the final rectangle
+  // can use the measured eye separation, which is the better ruler.
+  const finalEyeWidth = clamp(interocular * proportions.eyeSize[0], face.width * 0.1, face.width * 0.42);
+  const finalEyeHeight = clamp(interocular * proportions.eyeSize[1], face.height * 0.05, face.height * 0.32);
   return {
-    leftEye: { ...rectangle(leftCenter, eyeWidth, eyeHeight), confidence: leftCenter.confidence },
-    rightEye: { ...rectangle(rightCenter, eyeWidth, eyeHeight), confidence: rightCenter.confidence },
+    leftEye: { ...rectangle(leftCenter, finalEyeWidth, finalEyeHeight), confidence: leftCenter.confidence },
+    rightEye: { ...rectangle(rightCenter, finalEyeWidth, finalEyeHeight), confidence: rightCenter.confidence },
     mouth: { ...rectangle(mouthCenter, mouthWidth, mouthHeight), confidence: mouthCenter.confidence },
   };
 }
 
-export function analyzeImageData(imageData) {
+// Edge energy inside the face box. Blur destroys the very detail the feature
+// search depends on, and nothing else in the score notices: a five pixel blur
+// left confidence at 0.73 while the result fell to 0.39.
+function faceSharpness(imageData, face) {
+  const { width, height, data } = imageData;
+  const step = Math.max(1, Math.round(Math.min(face.width, face.height) / 48));
+  let total = 0;
+  let count = 0;
+  for (let y = Math.max(1, Math.floor(face.y)); y < Math.min(height - 1, face.y + face.height); y += step) {
+    for (let x = Math.max(1, Math.floor(face.x)); x < Math.min(width - 1, face.x + face.width); x += step) {
+      const at = (px, py) => {
+        const offset = (py * width + px) * 4;
+        return luminance(data[offset], data[offset + 1], data[offset + 2]);
+      };
+      total += Math.abs(at(x + 1, y) - at(x - 1, y)) + Math.abs(at(x, y + 1) - at(x, y - 1));
+      count += 1;
+    }
+  }
+  return count ? total / count : 0;
+}
+
+// Internal agreement. The two eyes should sit at the same height, straddle the
+// face centre, and be a plausible distance apart. When they disagree at least
+// one of them is wrong, and that is knowable without any ground truth.
+function pairAgreement(face, features) {
+  const { leftEye, rightEye } = features;
+  const leftCentre = leftEye.x + leftEye.width / 2;
+  const rightCentre = rightEye.x + rightEye.width / 2;
+  const spacing = rightCentre - leftCentre;
+  if (!(spacing > 0)) return 0.2;
+  const level = 1 - clamp(Math.abs((leftEye.y + leftEye.height / 2) - (rightEye.y + rightEye.height / 2))
+    / Math.max(1, leftEye.height), 0, 1);
+  const drift = Math.abs((leftCentre + rightCentre) / 2 - (face.x + face.width / 2)) / Math.max(1, face.width);
+  const centred = 1 - clamp(drift * 4, 0, 1);
+  const spread = spacing / Math.max(1, face.width);
+  const plausible = spread > 0.22 && spread < 0.78 ? 1 : 0.5;
+  return clamp(0.4 + 0.6 * level * centred * plausible, 0.2, 1);
+}
+
+// The skin centroid is a poor midline: hair falling across one cheek, or an ear
+// visible on one side only, shifts it while the eyes stay put. Recentring the
+// face box horizontally on the eye pair costs nothing when the eyes were found
+// well and fixes the whole downstream chain when they were not - every feature
+// band is placed relative to this box.
+//
+// Only the horizontal centre. Reframing the box from the eye pair outright was
+// measured and lost: it inherits whatever vertical bias the eye search has.
+function recentreOnEyes(face, features, subjectBounds) {
+  const { leftEye, rightEye } = features;
+  if (Math.min(leftEye.confidence, rightEye.confidence) < 0.24) return face;
+  const middle = (leftEye.x + leftEye.width / 2 + rightEye.x + rightEye.width / 2) / 2;
+  const drift = middle - (face.x + face.width / 2);
+  // A correction larger than this means the eyes are not where a face has eyes,
+  // so trust the skin region instead of chasing them.
+  if (Math.abs(drift) > face.width * 0.22) return face;
+  return {
+    ...face,
+    x: clamp(face.x + drift, subjectBounds.x, subjectBounds.x + subjectBounds.width - face.width),
+  };
+}
+
+export function analyzeImageData(imageData, style = 'anime') {
+  const proportions = PROPORTIONS[style] ?? PROPORTIONS.anime;
   const extraction = extractSubjectMask(imageData);
   const subject = maskBounds(extraction.mask, imageData.width, imageData.height);
-  const face = estimateFace(imageData, extraction.mask, subject);
-  const features = estimateFeatures(imageData, extraction.mask, face);
+  const roughFace = estimateFace(imageData, extraction.mask, subject, proportions);
+  const roughFeatures = estimateFeatures(imageData, extraction.mask, roughFace, proportions);
+  const face = recentreOnEyes(roughFace, roughFeatures, subject);
+  const features = face === roughFace
+    ? roughFeatures
+    : estimateFeatures(imageData, extraction.mask, face, proportions);
+  const sharpness = faceSharpness(imageData, face);
+  const agreement = pairAgreement(face, features);
+  const detail = clamp(sharpness / 25, 0.3, 1);
   const confidence = (
-    extraction.confidence * 0.3
-    + face.confidence * 0.35
+    extraction.confidence * 0.22
+    + face.confidence * 0.38
     + features.leftEye.confidence * 0.1
     + features.rightEye.confidence * 0.1
-    + features.mouth.confidence * 0.15
-  );
+    + features.mouth.confidence * 0.2
+  ) * agreement * detail;
   const warnings = [];
-  if (extraction.confidence < 0.45) warnings.push("Background removal was uncertain; inspect the silhouette.");
-  if (face.confidence < 0.45) warnings.push("Face placement used a composition fallback.");
+  if (extraction.mode === "full image fallback") {
+    warnings.push("Background removal was uncertain; the original background was kept to preserve the character.");
+  } else if (extraction.confidence < 0.45) warnings.push("Background removal was uncertain; inspect the silhouette.");
+  if (face.confidence < 0.45) warnings.push("Face placement was uncertain; check the face outline before building.");
+  if (face.method === "skin-region estimate" && face.height > subject.height * 0.45) {
+    warnings.push("No neck was found, so the face may include the body. Move the face outline onto the head.");
+  }
   if (Math.min(features.leftEye.confidence, features.rightEye.confidence) < 0.35) {
     warnings.push("One or both eye regions were estimated; inspect blink keyforms.");
   }
   if (features.mouth.confidence < 0.35) warnings.push("Mouth placement was estimated; inspect lip sync.");
-  return { ...extraction, subject, face, features, confidence, warnings };
+  return { ...extraction, subject, face, features, confidence, warnings, sharpness, agreement,
+    extraction: extraction.confidence, style: PROPORTIONS[style] ? style : 'anime' };
 }
 
 function canvasFor(width, height) {
@@ -357,183 +730,6 @@ function canvasFor(width, height) {
   canvas.width = Math.max(1, Math.round(width));
   canvas.height = Math.max(1, Math.round(height));
   return canvas;
-}
-
-function copyMaskedCrop(imageData, mask, bounds) {
-  const x = clamp(Math.floor(bounds.x), 0, imageData.width - 1);
-  const y = clamp(Math.floor(bounds.y), 0, imageData.height - 1);
-  const width = clamp(Math.ceil(bounds.width), 1, imageData.width - x);
-  const height = clamp(Math.ceil(bounds.height), 1, imageData.height - y);
-  const canvas = canvasFor(width, height);
-  const context = canvas.getContext("2d", { willReadFrequently: true });
-  const crop = context.createImageData(width, height);
-  for (let cropY = 0; cropY < height; cropY += 1) {
-    for (let cropX = 0; cropX < width; cropX += 1) {
-      const sourceIndex = (y + cropY) * imageData.width + x + cropX;
-      const sourceOffset = sourceIndex * 4;
-      const targetOffset = (cropY * width + cropX) * 4;
-      crop.data[targetOffset] = imageData.data[sourceOffset];
-      crop.data[targetOffset + 1] = imageData.data[sourceOffset + 1];
-      crop.data[targetOffset + 2] = imageData.data[sourceOffset + 2];
-      crop.data[targetOffset + 3] = imageData.data[sourceOffset + 3] * mask[sourceIndex] / 255;
-    }
-  }
-  context.putImageData(crop, 0, 0);
-  return { canvas, x, y, width, height };
-}
-
-function eyelidCrop(imageData, bounds) {
-  const x = clamp(Math.floor(bounds.x), 0, imageData.width - 1);
-  const y = clamp(Math.floor(bounds.y), 0, imageData.height - 1);
-  const width = clamp(Math.ceil(bounds.width), 1, imageData.width - x);
-  const height = clamp(Math.ceil(bounds.height), 1, imageData.height - y);
-  const canvas = canvasFor(width, height);
-  const context = canvas.getContext("2d");
-  const skin = averageSkinAround(imageData, bounds);
-  context.save();
-  context.translate(width / 2, height / 2);
-  context.scale(1, 0.48);
-  const gradient = context.createRadialGradient(0, 0, 0, 0, 0, width * 0.52);
-  gradient.addColorStop(0, `rgba(${skin[0]}, ${skin[1]}, ${skin[2]}, 1)`);
-  gradient.addColorStop(0.72, `rgba(${skin[0]}, ${skin[1]}, ${skin[2]}, 1)`);
-  gradient.addColorStop(1, `rgba(${skin[0]}, ${skin[1]}, ${skin[2]}, 0)`);
-  context.fillStyle = gradient;
-  context.beginPath();
-  context.arc(0, 0, width * 0.52, 0, Math.PI * 2);
-  context.fill();
-  context.restore();
-  context.strokeStyle = "rgba(58, 36, 70, .88)";
-  context.lineWidth = Math.max(2, width * 0.025);
-  context.lineCap = "round";
-  context.beginPath();
-  context.moveTo(width * 0.18, height * 0.53);
-  context.quadraticCurveTo(width * 0.5, height * 0.68, width * 0.82, height * 0.53);
-  context.stroke();
-  return { canvas, x, y, width, height };
-}
-
-function mouthInteriorCrop(imageData, bounds) {
-  const x = clamp(Math.floor(bounds.x), 0, imageData.width - 1);
-  const y = clamp(Math.floor(bounds.y), 0, imageData.height - 1);
-  const width = clamp(Math.ceil(bounds.width), 1, imageData.width - x);
-  const height = clamp(Math.ceil(bounds.height), 1, imageData.height - y);
-  const canvas = canvasFor(width, height);
-  const context = canvas.getContext("2d");
-  context.fillStyle = "#672342";
-  context.beginPath();
-  context.ellipse(width / 2, height / 2, width * 0.36, height * 0.33, 0, 0, Math.PI * 2);
-  context.fill();
-  context.fillStyle = "#e778a4";
-  context.beginPath();
-  context.ellipse(width / 2, height * 0.62, width * 0.24, height * 0.12, 0, 0, Math.PI * 2);
-  context.fill();
-  return { canvas, x, y, width, height };
-}
-
-function averageSkinAround(imageData, bounds) {
-  const { width, height, data } = imageData;
-  const margin = Math.max(3, Math.round(Math.min(bounds.width, bounds.height) * 0.24));
-  let count = 0;
-  const color = [0, 0, 0];
-  for (let y = Math.floor(bounds.y - margin); y <= Math.ceil(bounds.y + bounds.height + margin); y += 1) {
-    for (let x = Math.floor(bounds.x - margin); x <= Math.ceil(bounds.x + bounds.width + margin); x += 1) {
-      if (x < 0 || y < 0 || x >= width || y >= height) continue;
-      const inside = x >= bounds.x && x <= bounds.x + bounds.width && y >= bounds.y && y <= bounds.y + bounds.height;
-      if (inside) continue;
-      const offset = (y * width + x) * 4;
-      if (!isSkin(data[offset], data[offset + 1], data[offset + 2])) continue;
-      color[0] += data[offset];
-      color[1] += data[offset + 1];
-      color[2] += data[offset + 2];
-      count += 1;
-    }
-  }
-  if (!count) return [238, 190, 190];
-  return color.map((channel) => Math.round(channel / count));
-}
-
-function addTransformKey(layer, parameterId, value, transform) {
-  Object.assign(ensureKeyform(layer, parameterId, value).transform, transform);
-}
-
-function addWarpKey(layer, parameterId, value, warp) {
-  const key = ensureKeyform(layer, parameterId, value);
-  const { columns, rows, vertices } = layer.mesh;
-  for (let index = 0; index < vertices.length; index += 2) {
-    const vertex = index / 2;
-    const column = vertex % (columns + 1);
-    const row = Math.floor(vertex / (columns + 1));
-    const normalizedX = column / columns;
-    const normalizedY = row / rows;
-    const [offsetX, offsetY] = warp(normalizedX, normalizedY, vertices[index], vertices[index + 1]);
-    key.offsets[index] = offsetX;
-    key.offsets[index + 1] = offsetY;
-  }
-}
-
-function addHeadAndBodyWarp(layer, analysis, subjectBounds, displayWidth, displayHeight) {
-  const faceCenterX = ((analysis.face.x + analysis.face.width / 2 - subjectBounds.x) / subjectBounds.width);
-  const faceCenterY = ((analysis.face.y + analysis.face.height / 2 - subjectBounds.y) / subjectBounds.height);
-  const faceRadiusX = analysis.face.width / subjectBounds.width * 0.78;
-  const faceRadiusY = analysis.face.height / subjectBounds.height * 0.78;
-  const headWeight = (u, v) => {
-    const dx = (u - faceCenterX) / Math.max(0.12, faceRadiusX);
-    const dy = (v - faceCenterY) / Math.max(0.12, faceRadiusY);
-    return clamp(1 - Math.sqrt(dx * dx + dy * dy), 0, 1) ** 0.55;
-  };
-  for (const direction of [-1, 1]) {
-    addWarpKey(layer, "head.yaw", direction, (u, v) => {
-      const weight = headWeight(u, v);
-      return [direction * (25 + (v - faceCenterY) * 10) * weight, direction * (u - faceCenterX) * 8 * weight];
-    });
-    addWarpKey(layer, "head.pitch", direction, (u, v) => {
-      const weight = headWeight(u, v);
-      return [0, direction * 19 * weight];
-    });
-    addWarpKey(layer, "head.roll", direction, (u, v, x, y) => {
-      const weight = headWeight(u, v);
-      const centerX = (faceCenterX - 0.5) * displayWidth;
-      const centerY = (faceCenterY - 0.5) * displayHeight;
-      const angle = direction * 0.09 * weight;
-      const dx = x - centerX;
-      const dy = y - centerY;
-      return [dx * Math.cos(angle) - dy * Math.sin(angle) - dx, dx * Math.sin(angle) + dy * Math.cos(angle) - dy];
-    });
-    addWarpKey(layer, "body.sway", direction, (u, v) => {
-      const weight = clamp((v - faceCenterY) / Math.max(0.1, 1 - faceCenterY), 0, 1);
-      return [direction * 28 * weight, direction * (u - 0.5) * 5 * weight];
-    });
-    addWarpKey(layer, "hair.motion", direction, (u, v) => {
-      const upper = clamp((0.72 - v) / 0.72, 0, 1);
-      const edge = clamp(Math.abs(u - 0.5) * 2, 0, 1);
-      const weight = upper * (0.25 + edge * 0.75) * (1 - headWeight(u, v) * 0.42);
-      return [direction * (10 + v * 22) * weight, Math.abs(direction) * edge * 3 * weight];
-    });
-  }
-}
-
-function addHeadFollower(layer) {
-  for (const direction of [-1, 1]) {
-    addTransformKey(layer, "head.yaw", direction, { x: direction * 24, rotation: direction * 0.018 });
-    addTransformKey(layer, "head.pitch", direction, { y: direction * 18 });
-    addTransformKey(layer, "head.roll", direction, { rotation: direction * 0.09 });
-  }
-}
-
-function addEyelidMotion(layer) {
-  addHeadFollower(layer);
-  layer.transform.opacity = 0;
-  addTransformKey(layer, "eyes.blink", 1, { opacity: 1 });
-}
-
-function addMouthMotion(layer) {
-  addHeadFollower(layer);
-  layer.transform.opacity = 0;
-  layer.transform.scaleY = 0.28;
-  addTransformKey(layer, "mouth.open", 0.12, { opacity: 0 });
-  addTransformKey(layer, "mouth.open", 1, { opacity: 1, scaleY: 0.72 });
-  addTransformKey(layer, "mouth.form", -1, { scaleX: -0.22 });
-  addTransformKey(layer, "mouth.form", 1, { scaleX: 0.25 });
 }
 
 async function decodeImage(file) {
@@ -546,85 +742,50 @@ async function decodeImage(file) {
   return { canvas, imageData: context.getImageData(0, 0, canvas.width, canvas.height) };
 }
 
-function cropToLayer(crop, name, subjectBounds, modelScale, zIndex, columns, rows) {
-  const displayWidth = crop.width * modelScale;
-  const displayHeight = crop.height * modelScale;
-  return createLayer({
-    name,
-    src: crop.canvas.toDataURL("image/png"),
-    width: displayWidth,
-    height: displayHeight,
-    columns,
-    rows,
-    x: (crop.x + crop.width / 2 - (subjectBounds.x + subjectBounds.width / 2)) * modelScale,
-    y: (crop.y + crop.height / 2 - (subjectBounds.y + subjectBounds.height / 2)) * modelScale,
-    zIndex,
-  });
+export async function prepareAutoRig(file, style = 'anime', { signal, detectLandmarks = true } = {}) {
+  if (!file?.type?.startsWith("image/")) throw new Error("Please choose a PNG, WebP, or JPEG image.");
+  const { imageData } = await decodeImage(file);
+  let analysis = analyzeImageData(imageData, style);
+  if (style === 'anime' && detectLandmarks) {
+    try {
+      analysis = applyAnimeLandmarks(analysis, await detectAnimeLandmarks(imageData, { signal }), imageData.width, imageData.height);
+    } catch (error) {
+      signal?.throwIfAborted();
+      analysis.warnings.push(`Anime detector: ${error.message} Using estimated outlines.`);
+    }
+  }
+  return { imageData, analysis, regions: addRegionContours(fitRegions(defaultRegions(analysis), imageData.width, imageData.height), imageData), name: file.name.replace(/\.[^.]+$/, "") || "Auto-rigged Puppet" };
 }
 
-export async function autoRigFile(file, { onProgress = () => {} } = {}) {
-  if (!file?.type?.startsWith("image/")) throw new Error("Please choose a PNG, WebP, or JPEG image.");
-  onProgress("Decoding artwork", 0.08);
-  const { imageData } = await decodeImage(file);
-  await new Promise((resolve) => requestAnimationFrame(resolve));
-  onProgress("Finding the character silhouette", 0.24);
-  const analysis = analyzeImageData(imageData);
-  await new Promise((resolve) => requestAnimationFrame(resolve));
-  onProgress("Locating face, eyes, and mouth", 0.42);
-
-  const subjectBounds = analysis.subject;
-  const modelScale = Math.min(900 / subjectBounds.height, 840 / subjectBounds.width);
-  const displayWidth = subjectBounds.width * modelScale;
-  const displayHeight = subjectBounds.height * modelScale;
-  const baseCrop = copyMaskedCrop(imageData, analysis.mask, subjectBounds);
-  const leftEyelidCrop = eyelidCrop(imageData, analysis.features.leftEye);
-  const rightEyelidCrop = eyelidCrop(imageData, analysis.features.rightEye);
-  const mouthCrop = mouthInteriorCrop(imageData, analysis.features.mouth);
-
-  onProgress("Reconstructing blink surfaces", 0.58);
-  await new Promise((resolve) => requestAnimationFrame(resolve));
-
-  onProgress("Generating meshes and keyforms", 0.74);
-  const modelName = file.name.replace(/\.[^.]+$/, "") || "Auto-rigged Puppet";
-  const model = createModel(modelName);
-  model.meta.generator = "Kokoro2D Full Auto Rigger 0.1.0";
-  model.meta.autoRig = {
-    version: 1,
-    sourceName: file.name,
-    analyzedAt: new Date().toISOString(),
-    confidence: Number(analysis.confidence.toFixed(3)),
+export async function autoRigFile(file, { onProgress = () => {}, review = null, regions = null, signal = null, style = 'anime', faceOnly = false } = {}) {
+  onProgress("Finding the character and features", 0.1);
+  const prepared = await prepareAutoRig(file, style, { signal });
+  signal?.throwIfAborted();
+  onProgress("Review feature placement", 0.35);
+  // The review may switch proportions, which re-estimates the whole analysis, so
+  // it answers with { regions, analysis }. Older reviewers answered with the
+  // regions alone; accept either, because getting this wrong lands as an
+  // undefined deep inside the rig builder rather than as anything readable.
+  const answer = regions ?? (review ? await review({ ...prepared, faceOnly }) : prepared.regions);
+  const placement = answer?.regions ?? answer;
+  const analysis = answer?.analysis ?? prepared.analysis;
+  if (!placement?.face) {
+    throw new Error("The placement review returned no regions. If this page has been open a while, reload it.");
+  }
+  onProgress("Separating artwork and building the rig", 0.6);
+  await new Promise(resolve => requestAnimationFrame(resolve));
+  signal?.throwIfAborted();
+  const model = buildLayeredRig(prepared.imageData, analysis, placement, prepared.name, { faceOnly });
+  const report = {
+    confidence: analysis.confidence,
+    proportions: PROPORTIONS[analysis.style ?? 'anime'].label,
     backgroundMode: analysis.mode,
-    faceMethod: analysis.face.method,
-    warnings: analysis.warnings,
+    landmarkMethod: analysis.landmarkMethod ?? "Estimated landmarks",
+    warnings: model.meta.autoRig.warnings,
+    sourceSize: `${prepared.imageData.width}×${prepared.imageData.height}`,
+    meshVertices: model.layers.reduce((sum,l)=>sum+l.mesh.vertices.length/2,0),
+    keyforms: model.layers.reduce((sum,l)=>sum+Object.values(l.keyforms).reduce((n,k)=>n+k.length,0),0),
   };
-  model.canvas = { width: 1000, height: 1000, background: "#1b1126" };
-
-  const baseLayer = cropToLayer(baseCrop, "Auto Subject", subjectBounds, modelScale, 0, 10, 12);
-  addHeadAndBodyWarp(baseLayer, analysis, subjectBounds, displayWidth, displayHeight);
-  const leftEyelid = cropToLayer(leftEyelidCrop, "Left Eyelid", subjectBounds, modelScale, 1, 3, 2);
-  const rightEyelid = cropToLayer(rightEyelidCrop, "Right Eyelid", subjectBounds, modelScale, 2, 3, 2);
-  const mouth = cropToLayer(mouthCrop, "Mouth Interior", subjectBounds, modelScale, 3, 4, 2);
-  addEyelidMotion(leftEyelid);
-  addEyelidMotion(rightEyelid);
-  addMouthMotion(mouth);
-  model.layers.push(baseLayer, leftEyelid, rightEyelid, mouth);
-
-  onProgress("Polishing the tiny performer", 0.92);
-  await new Promise((resolve) => requestAnimationFrame(resolve));
-  onProgress("Auto-rig complete", 1);
-  return {
-    model,
-    report: {
-      confidence: analysis.confidence,
-      backgroundMode: analysis.mode,
-      faceMethod: analysis.face.method,
-      warnings: analysis.warnings,
-      sourceSize: `${imageData.width}×${imageData.height}`,
-      meshVertices: model.layers.reduce((total, layer) => total + layer.mesh.vertices.length / 2, 0),
-      keyforms: model.layers.reduce(
-        (total, layer) => total + Object.values(layer.keyforms).reduce((sum, keys) => sum + keys.length, 0),
-        0,
-      ),
-    },
-  };
+  onProgress("Layered rig complete", 1);
+  return { model, report };
 }

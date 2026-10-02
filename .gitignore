@@ -3,4 +3,7 @@ node_modules/
 coverage/
 dist/
 *.log
+__pycache__/
+*.mp4
 
+.venv-anime/

@@ -1,4 +1,8 @@
+import { reviewRegions } from "./region-editor.js";
+import { bindParent, evaluateScene, sceneToLayer } from "./scene.js";
+import { PuppetMotion } from "./motion.js";
 import {
+  AUTOSAVE_KEY,
   clone,
   createLayer,
   defaultParameterValues,
@@ -12,10 +16,11 @@ import {
   validateModel,
 } from "./model.js";
 import { KokoroRenderer } from "./renderer.js";
-import { createSampleModel } from "./sample.js";
+import { createLayeredSampleModel } from "./sample.js";
 import { autoRigFile } from "./auto-rigger.js";
 
-const AUTOSAVE_KEY = "kokoro2d-maker-autosave-v1";
+const motion = new PuppetMotion({ style: "energetic" });
+
 const canvas = document.querySelector("#makerCanvas");
 const overlay = document.querySelector("#meshOverlay");
 const renderer = new KokoroRenderer(canvas);
@@ -74,6 +79,7 @@ async function restore(serialized) {
 }
 
 function changed(message = "Changes autosaved locally") {
+  state.model.version = 2;
   state.dirty = true;
   state.model.meta.modifiedAt = new Date().toISOString();
   localStorage.setItem(AUTOSAVE_KEY, snapshot());
@@ -128,6 +134,9 @@ function refreshLayerList() {
 }
 
 function refreshParameterList() {
+  if (!state.model.parameters[state.selectedParameterId]) {
+    state.selectedParameterId = Object.keys(state.model.parameters)[0];
+  }
   elements.parameterSelect.replaceChildren();
   for (const parameter of Object.values(state.model.parameters)) {
     const option = document.createElement("option");
@@ -151,6 +160,12 @@ function refreshInspector() {
   if (!layer) return;
 
   const pose = evaluateLayer(layer, state.values, state.model.parameters);
+  for (const [select, value] of [[elements.layerParent, layer.parent?.id], [elements.layerMask, layer.clipMask]]) {
+    select.replaceChildren(new Option("None", ""));
+    for (const item of state.model.layers) if (item.id !== layer.id) select.add(new Option(item.name, item.id));
+    select.value = value ?? "";
+  }
+  elements.layerMaskOnly.checked = Boolean(layer.maskOnly);
   elements.layerName.value = layer.name;
   elements.layerVisible.checked = layer.visible;
   elements.layerX.value = formatNumber(pose.transform.x);
@@ -295,7 +310,7 @@ function drawOverlay() {
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
   context.clearRect(0, 0, width, height);
   if (!layer || state.autoplay) return;
-  const pose = evaluateLayer(layer, state.values, state.model.parameters);
+  const pose = evaluateScene(state.model, state.values).get(layer.id);
   const points = [];
   for (let index = 0; index < pose.vertices.length; index += 2) {
     const world = renderer.localToWorld(pose.vertices[index], pose.vertices[index + 1], pose.transform);
@@ -327,7 +342,7 @@ function nearestVertex(clientX, clientY) {
   if (!layer) return null;
   const rect = overlay.getBoundingClientRect();
   const pointer = { x: clientX - rect.left, y: clientY - rect.top };
-  const pose = evaluateLayer(layer, state.values, state.model.parameters);
+  const pose = evaluateScene(state.model, state.values).get(layer.id);
   let best = null;
   for (let index = 0; index < pose.vertices.length; index += 2) {
     const world = renderer.localToWorld(pose.vertices[index], pose.vertices[index + 1], pose.transform);
@@ -342,23 +357,8 @@ function nearestVertex(clientX, clientY) {
 
 function animate(timeMs) {
   if (state.model) {
-    if (state.autoplay) {
-      const time = timeMs / 1000;
-      const yaw = Math.sin(time * 0.31) * 0.25 + Math.sin(time * 0.73 + 1.1) * 0.07;
-      const speech = Math.max(0, Math.sin(time * 0.52 + 0.4)) ** 1.8;
-      state.values["head.yaw"] = yaw;
-      state.values["head.pitch"] = Math.sin(time * 0.23 + 0.8) * 0.07;
-      state.values["head.roll"] = -yaw * 0.14 + Math.sin(time * 0.19) * 0.025;
-      state.values["body.sway"] = Math.sin(time * 0.27 + 0.5) * 0.14;
-      state.values["body.breathe"] = Math.sin(time * 1.12) * 0.48;
-      state.values["hair.motion"] = -yaw * 0.34 + Math.sin(time * 0.43 - 0.7) * 0.08;
-      state.values["eyes.lookX"] = Math.sin(time * 0.37) * 0.18;
-      state.values["eyes.lookY"] = Math.sin(time * 0.29 + 0.4) * 0.08;
-      state.values["mouth.open"] = speech * (0.12 + (Math.sin(time * 8.1) * 0.5 + 0.5) * 0.25);
-      state.values["mouth.form"] = Math.sin(time * 2.1) * 0.1;
-      const blinkPhase = time % 4.3;
-      state.values["eyes.blink"] = blinkPhase > 4.12 ? Math.sin((blinkPhase - 4.12) / 0.18 * Math.PI) : 0;
-    }
+    const pose = motion.update(timeMs, state.model, { active: state.autoplay });
+    if (state.autoplay) Object.assign(state.values, pose);
     renderer.render(state.values);
     drawOverlay();
   }
@@ -419,6 +419,28 @@ elements.layerVisible.addEventListener("change", () => {
   changed();
 });
 
+for (const [element, property] of [[elements.layerParent, 'parent'], [elements.layerMask, 'clipMask']]) {
+  element.addEventListener('change', () => {
+    const layer = selectedLayer();
+    if (!layer) return;
+    const previous = structuredClone(layer[property]);
+    if (property === 'parent' && element.value) bindParent(layer, state.model.layers.find(item => item.id === element.value));
+    else if (element.value) layer[property] = element.value;
+    else delete layer[property];
+    const errors = validateModel(state.model);
+    if (errors.length) { if (previous === undefined) delete layer[property]; else layer[property] = previous; refreshInspector(); setStatus(errors.join(' '), 'bad'); return; }
+    const next = structuredClone(layer[property]);
+    if (previous === undefined) delete layer[property]; else layer[property] = previous;
+    checkpoint();
+    if (next === undefined) delete layer[property]; else layer[property] = next;
+    changed('Layer relationship updated');
+  });
+}
+elements.layerMaskOnly.addEventListener('change', () => {
+  const layer = selectedLayer(); if (!layer) return;
+  checkpoint(); layer.maskOnly = elements.layerMaskOnly.checked; changed('Layer display updated');
+});
+
 elements.addLayers.addEventListener("click", () => elements.layerFiles.click());
 elements.layerFiles.addEventListener("change", async () => {
   await importFiles(elements.layerFiles.files);
@@ -427,6 +449,10 @@ elements.layerFiles.addEventListener("change", async () => {
 elements.deleteLayer.addEventListener("click", async () => {
   const layer = selectedLayer();
   if (!layer) return;
+  if (state.model.layers.some(item => item.parent?.id === layer.id || item.clipMask === layer.id)) {
+    setStatus("Detach child layers and clipping masks before deleting this layer.", "bad");
+    return;
+  }
   checkpoint();
   state.model.layers = state.model.layers.filter((candidate) => candidate.id !== layer.id);
   state.model.layers.forEach((candidate, index) => { candidate.zIndex = index; });
@@ -482,7 +508,7 @@ function updateAutoRigProgress(message, progress) {
 }
 
 async function runAutoRig(file) {
-  if (!file) return;
+  if (!file || elements.autoRigInput.disabled) return;
   if (state.dirty && !confirm("Replace the current model with this auto-rig? Your autosave will be replaced.")) return;
   if (autoRigPreviewUrl) URL.revokeObjectURL(autoRigPreviewUrl);
   autoRigPreviewUrl = URL.createObjectURL(file);
@@ -491,16 +517,21 @@ async function runAutoRig(file) {
   elements.autoRigDropCopy.hidden = true;
   elements.autoRigReport.hidden = true;
   elements.autoRigWarnings.replaceChildren();
+  const faceOnly = elements.autoRigFaceOnly.checked;
+  elements.autoRigFaceOnly.disabled = true;
   elements.autoRigInput.disabled = true;
   updateAutoRigProgress("Waking up the pixel goblins", 0.02);
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  elements.autoRigDialog.addEventListener('close', abort, { once: true });
 
   try {
-    const { model, report } = await autoRigFile(file, { onProgress: updateAutoRigProgress });
+    const { model, report } = await autoRigFile(file, { faceOnly, signal: controller.signal, onProgress: updateAutoRigProgress, review: prepared => reviewRegions(elements.autoRigDialog, prepared) });
     await loadModel(model, `Auto-rigged ${model.meta.name}`);
     state.dirty = true;
     elements.autoRigConfidence.textContent = `${Math.round(report.confidence * 100)}%`;
     elements.autoRigResultTitle.textContent = `${model.meta.name} is alive`;
-    elements.autoRigResultStats.textContent = `${report.sourceSize} source · ${report.meshVertices} mesh points · ${report.keyforms} authored keyforms · ${report.backgroundMode}`;
+    elements.autoRigResultStats.textContent = `${report.sourceSize} source · ${report.meshVertices} mesh points · ${report.keyforms} authored keyforms · ${report.backgroundMode} · ${report.landmarkMethod}`;
     const warnings = report.warnings.length
       ? report.warnings
       : ["No major uncertainty detected. Still inspect the blink and mouth because pixels are sneaky."];
@@ -510,8 +541,12 @@ async function runAutoRig(file) {
       elements.autoRigWarnings.append(item);
     }
     elements.autoRigReport.hidden = false;
-    setStatus(`Full auto-rig complete: ${Math.round(report.confidence * 100)}% confidence`, "good");
+    setStatus(`${faceOnly ? 'Blink and talking rig' : 'Full auto-rig'} complete: ${Math.round(report.confidence * 100)}% confidence`, "good");
   } catch (error) {
+    if (controller.signal.aborted || error.message === 'Rig creation cancelled.') {
+      setStatus('Rig creation cancelled; current model kept');
+      return;
+    }
     console.error(error);
     elements.autoRigResultTitle.textContent = "The ritual encountered a problem";
     elements.autoRigResultStats.textContent = error.message;
@@ -519,7 +554,9 @@ async function runAutoRig(file) {
     elements.autoRigReport.hidden = false;
     setStatus(`Auto-rig failed: ${error.message}`, "bad");
   } finally {
+    elements.autoRigDialog.removeEventListener("close", abort);
     elements.autoRigInput.disabled = false;
+    elements.autoRigFaceOnly.disabled = false;
   }
 }
 
@@ -556,7 +593,7 @@ elements.autoRigDialog.addEventListener("close", () => {
 });
 elements.newSample.addEventListener("click", async () => {
   if (state.dirty && !confirm("Replace the current model with a fresh sample?")) return;
-  await loadModel(createSampleModel(), "Fresh sample created");
+  await loadModel(await createLayeredSampleModel(), "Fresh sample created");
 });
 elements.togglePreview.addEventListener("click", () => {
   state.autoplay = !state.autoplay;
@@ -598,8 +635,8 @@ overlay.addEventListener("pointermove", (event) => {
   const layer = selectedLayer();
   const rect = overlay.getBoundingClientRect();
   const world = renderer.screenToWorld(event.clientX - rect.left, event.clientY - rect.top);
-  const pose = evaluateLayer(layer, state.values, state.model.parameters);
-  const local = renderer.worldToLocal(world.x, world.y, pose.transform);
+  const [localX, localY] = sceneToLayer(layer, world.x, world.y, state.model, state.values);
+  const local = { x: localX, y: localY };
   const valueIndex = state.drag.vertexIndex * 2;
   const key = activeKeyform(layer);
   if (key) {
@@ -643,12 +680,12 @@ async function boot() {
       state.selectedLayerId = saved.selectedLayerId;
       refreshAll();
     } else {
-      await loadModel(createSampleModel(), "Sample puppet ready");
+      await loadModel(await createLayeredSampleModel(), "Sample puppet ready");
     }
   } catch (error) {
     console.error(error);
     localStorage.removeItem(AUTOSAVE_KEY);
-    await loadModel(createSampleModel(), "Autosave was invalid; loaded sample");
+    await loadModel(await createLayeredSampleModel(), "Autosave was invalid; loaded sample");
   }
   state.dirty = false;
   requestAnimationFrame(animate);

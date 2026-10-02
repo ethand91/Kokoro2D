@@ -1,4 +1,6 @@
+import { attachToPortrait } from "./rig.js";
 import { createLayer, createModel, ensureKeyform } from "./model.js";
+import { sampleRegions, finishSampleRig } from "./sample-rig.js";
 
 const AVATAR_ASSET = "./static/kokoro-chan.webp";
 const SPEAK_ASSET = "./static/kokoro-chan-speak.webp";
@@ -69,21 +71,6 @@ function addPortraitMotion(layer) {
   }
 }
 
-function addHeadFollower(layer) {
-  for (const direction of [-1, 1]) {
-    addTransformKey(layer, "head.yaw", direction, { x: direction * 8, rotation: direction * 0.006 });
-    addTransformKey(layer, "head.pitch", direction, { y: direction * 7 });
-    const angle = direction * 0.038;
-    const x = layer.transform.x;
-    const y = layer.transform.y + 225;
-    addTransformKey(layer, "head.roll", direction, {
-      x: x * Math.cos(angle) - y * Math.sin(angle) - x,
-      y: x * Math.sin(angle) + y * Math.cos(angle) - y,
-      rotation: angle,
-    });
-  }
-}
-
 function createExpressionPatch({ name, asset, crop, position, zIndex, parameter }) {
   const layer = createLayer({
     name,
@@ -100,7 +87,6 @@ function createExpressionPatch({ name, asset, crop, position, zIndex, parameter 
   layer.source.feather = 0.05;
   layer.source.mask = "ellipse";
   layer.transform.opacity = 0;
-  addHeadFollower(layer);
   addTransformKey(layer, parameter, 0.08, { opacity: 0 });
   addTransformKey(layer, parameter, 1, { opacity: 1 });
   if (parameter === "mouth.open") {
@@ -130,7 +116,6 @@ function createEyelid(name, x) {
     `),
   });
   layer.transform.opacity = 0;
-  addHeadFollower(layer);
   addTransformKey(layer, "eyes.blink", 0.1, { opacity: 0 });
   addTransformKey(layer, "eyes.blink", 1, { opacity: 1 });
   return layer;
@@ -177,5 +162,21 @@ export function createSampleModel() {
       parameter: "mouth.open",
     }),
   );
+  for (const patch of model.layers.slice(1)) attachToPortrait(patch, portrait);
   return model;
+}
+
+// Browser sample uses the same layered pipeline as imported portraits, with
+// reviewed landmarks for the bundled artwork instead of colour-based guesses.
+export async function createLayeredSampleModel() {
+  const { prepareAutoRig } = await import('./auto-rigger.js');
+  const { buildLayeredRig } = await import('./layered-rig.js');
+  const response = await fetch(AVATAR_ASSET);
+  if (!response.ok) throw new Error('Unable to load sample artwork.');
+  const prepared = await prepareAutoRig(new File([await response.blob()], 'Kokoro-chan.webp', { type:'image/webp' }), 'anime', { detectLandmarks:false });
+  const regions = sampleRegions();
+  const model = buildLayeredRig(prepared.imageData,prepared.analysis,regions,'Kokoro-chan');
+  model.meta.author='Kokoro2D'; model.meta.license='CC0 sample puppet';
+  model.meta.artwork='Original Kokoro2D character with reviewed outlines and painted eyes';
+  return finishSampleRig(model,prepared.imageData,prepared.analysis);
 }
