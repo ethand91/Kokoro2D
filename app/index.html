@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#17101f">
+  <title>Kokoro2D Maker</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="./index.html" aria-label="Kokoro2D home">
+      <span class="brand-mark">心</span>
+      <span><strong>Kokoro2D</strong><small>Maker alpha</small></span>
+    </a>
+    <div class="toolbar">
+      <button id="autoRigButton" class="sparkle-button" type="button">✨ Auto-rig PNG</button>
+      <button id="newSample" type="button">New sample</button>
+      <button id="importModel" type="button">Open</button>
+      <button id="exportModel" class="primary" type="button">Export .kokoro2d</button>
+      <button id="exportArchive" type="button">Export project ZIP</button>
+      <button id="recoverProject" type="button">Recovery history</button>
+      <a class="button" href="./viewer.html">Open Viewer ↗</a>
+      <input id="modelFile" type="file" accept=".kokoro2d,.zip,.ora,application/json,application/zip" hidden>
+    </div>
+  </header>
+
+  <main class="maker-layout">
+    <aside class="panel layers-panel">
+      <section>
+        <div class="section-title"><h2>Layers</h2><button id="addLayers" class="icon-button" title="Import PNG layers" type="button">＋</button></div>
+        <input id="layerFiles" type="file" accept="image/png,image/webp,image/jpeg,image/svg+xml" multiple hidden>
+        <p id="emptyLayers" class="empty" hidden>Import separated character artwork to begin.</p>
+        <div id="layerList" class="layer-list"></div>
+        <div class="layer-actions">
+          <button id="layerDown" type="button" title="Move behind">↓</button>
+          <button id="layerUp" type="button" title="Move forward">↑</button>
+          <button id="deleteLayer" class="danger" type="button">Delete</button>
+        </div>
+      </section>
+
+      <section class="model-meta">
+        <h2>Puppet</h2>
+        <label>Name<input id="modelName" type="text"></label>
+        <label>Author<input id="modelAuthor" type="text" placeholder="Your name"></label>
+      </section>
+    </aside>
+
+    <section class="stage-column">
+      <div class="stage-toolbar">
+        <div>
+          <button id="undo" type="button" title="Undo (⌘Z)">↶ Undo</button>
+          <button id="redo" type="button" title="Redo (⇧⌘Z)">↷ Redo</button>
+        </div>
+        <button id="togglePreview" type="button">Animate preview</button>
+      </div>
+      <div class="stage-shell">
+        <div class="stage-grid"></div>
+        <canvas id="makerCanvas"></canvas>
+        <canvas id="meshOverlay"></canvas>
+        <div class="axis axis-x"></div><div class="axis axis-y"></div>
+      </div>
+      <div class="statusbar">
+        <span class="status-dot"></span><span id="statusText">Starting Kokoro2D…</span>
+        <span class="format-label">WebGL2 · schema v3</span>
+      </div>
+    </section>
+
+    <aside class="panel inspector-panel">
+      <section>
+        <h2>Parameter</h2>
+        <label>Channel<select id="parameterSelect"></select></label>
+        <div class="range-row">
+          <input id="parameterValue" type="range">
+          <input id="parameterNumber" class="number" type="number">
+        </div>
+        <label class="checkbox"><input id="combineParameters" type="checkbox"> Combined-pose correction</label>
+        <label>Second channel<select id="secondParameter"></select></label><input id="secondValue" type="range" min="-1" max="1" step=".01" value="0">
+        <div class="keyform-line">
+          <span id="keyformBadge" class="badge">Preview only</span>
+          <button id="createKeyform" class="primary" type="button">Create keyform</button>
+          <button id="deleteKeyform" type="button">Remove</button>
+        </div>
+        <p class="hint">Move the parameter away from its default, create a keyform, then transform or sculpt the layer.</p>
+      </section>
+
+      <section>
+        <h2>Layer Inspector</h2>
+        <p id="noSelection" class="empty">Select a layer to edit it.</p>
+        <div id="layerInspector">
+          <label>Layer name<input id="layerName" type="text"></label>
+          <label class="checkbox"><input id="layerVisible" type="checkbox"> Visible</label>
+          <button id="editArtwork" type="button">Retouch / replace artwork</button>
+          <label>Blend mode<select id="layerBlend"><option>normal</option><option>multiply</option><option>screen</option><option>overlay</option></select></label>
+          <label>Compositing group<select id="layerGroup"></select></label><button id="createGroup" type="button">Create isolated group</button>
+          <details id="groupInspector"><summary>Group settings</summary><label>Group name<input id="groupName"></label><label>Parent group<select id="groupParent"></select></label>
+          <label>Group opacity<input id="groupOpacity" type="number" min="0" max="1" step=".05"></label><label class="checkbox"><input id="groupVisible" type="checkbox"> Group visible</label>
+          <label>Group blend<select id="groupBlend"><option>normal</option><option>multiply</option><option>screen</option><option>overlay</option></select></label>
+          <label>Group mask<select id="groupMask"></select></label><button id="dissolveGroup" type="button">Dissolve group</button></details>
+          <label>Parent deformer<select id="layerParent"></select></label>
+          <label>Clip to layer<select id="layerMask"></select></label>
+          <label class="checkbox"><input id="layerMaskOnly" type="checkbox"> Deformer / mask only</label>
+          <div class="property-grid">
+            <label>X<input id="layerX" type="number" step="1"></label>
+            <label>Y<input id="layerY" type="number" step="1"></label>
+            <label>Rotation °<input id="layerRotation" type="number" step="1"></label>
+            <label>Opacity<input id="layerOpacity" type="number" min="0" max="1" step="0.05"></label>
+            <label>Scale X<input id="layerScaleX" type="number" step="0.05"></label>
+            <label>Scale Y<input id="layerScaleY" type="number" step="0.05"></label>
+          </div>
+          <div class="mesh-info">
+            <strong>Mesh sculpt</strong>
+            <p id="vertexHint">Drag mesh points on the stage.</p>
+          </div>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <dialog id="autoRigDialog" class="auto-rig-dialog">
+    <form method="dialog" class="dialog-card">
+      <div class="dialog-heading">
+        <div>
+          <span class="eyebrow">Kokoro vision lab</span>
+          <h2>Full Auto Rigger ✨</h2>
+        </div>
+        <button id="autoRigClose" class="dialog-close" value="cancel" aria-label="Close" type="submit">×</button>
+      </div>
+      <p class="dialog-copy">Give her one front-facing anime PNG. Kokoro2D will remove the background, find her face, rebuild movable features, generate meshes, and author a starter rig locally in your browser.</p>
+
+      <label class="checkbox"><input id="autoRigFaceOnly" type="checkbox"> Blink and talking only</label>
+      <p class="hint">Check before choosing an image to keep the head, body, and hair still.</p>
+
+      <label id="autoRigDrop" class="auto-rig-drop">
+        <input id="autoRigInput" type="file" accept="image/png,image/webp,image/jpeg" hidden>
+        <img id="autoRigPreview" alt="Uploaded character preview" hidden>
+        <span id="autoRigDropCopy"><strong>Drop an anime girl here</strong><small>or click to choose PNG, WebP, or JPEG</small></span>
+      </label>
+
+      <div id="autoRigProgress" class="auto-rig-progress" hidden>
+        <div class="progress-track"><span id="autoRigProgressBar"></span></div>
+        <p id="autoRigProgressText">Preparing the ritual…</p>
+      </div>
+
+      <section id="autoRigReport" class="auto-rig-report" hidden>
+        <div class="confidence-ring"><strong id="autoRigConfidence">—</strong><span>confidence</span></div>
+        <div>
+          <h3 id="autoRigResultTitle">Rig complete</h3>
+          <p id="autoRigResultStats"></p>
+          <ul id="autoRigWarnings"></ul>
+        </div>
+      </section>
+      <p class="privacy-note">🔒 Processing stays on this device. Your artwork is not uploaded anywhere.</p>
+    </form>
+  </dialog>
+
+  <script type="module" src="./src/app.js"></script>
+</body>
+</html>
