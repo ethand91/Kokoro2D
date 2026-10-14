@@ -4,8 +4,9 @@
   "meta": {
     "id": "puppet_76df4842-f090-4424-b616-6d5b1f530242",
     "name": "sample",
-    "author": "",
-    "license": "All rights reserved",
+    "author": "Kokoro2D contributors",
+    "license": "CC-BY-4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
     "createdAt": "2026-09-16T03:38:01.684Z",
     "generator": "Kokoro2D Maker 0.1.0",
     "rigRevision": 2,

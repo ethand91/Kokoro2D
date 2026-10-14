@@ -4,8 +4,9 @@
   "meta": {
     "id": "puppet_363406a6-65a7-45e6-b697-9b8d6388de5d",
     "name": "Interviewer",
-    "author": "",
-    "license": "All rights reserved",
+    "author": "Kokoro2D contributors",
+    "license": "CC-BY-4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
     "createdAt": "2026-09-16T03:38:01.684Z",
     "generator": "Kokoro2D Maker 0.1.0",
     "rigRevision": 2,

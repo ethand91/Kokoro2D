@@ -123,8 +123,9 @@ function createEyelid(name, x) {
 
 export function createSampleModel() {
   const model = createModel("Kokoro-chan");
-  model.meta.author = "Kokoro2D";
-  model.meta.license = "CC0 sample puppet";
+  model.meta.author = "Kokoro2D contributors";
+  model.meta.license = "CC-BY-4.0";
+  model.meta.licenseUrl = "https://creativecommons.org/licenses/by/4.0/";
   model.meta.artwork = "Original Kokoro2D default character";
   model.canvas.background = "#160e20";
   model.parameters["body.breathe"] = {
@@ -176,7 +177,8 @@ export async function createLayeredSampleModel() {
   const prepared = await prepareAutoRig(new File([await response.blob()], 'Kokoro-chan.webp', { type:'image/webp' }), 'anime', { detectLandmarks:false });
   const regions = sampleRegions();
   const model = buildLayeredRig(prepared.imageData,prepared.analysis,regions,'Kokoro-chan');
-  model.meta.author='Kokoro2D'; model.meta.license='CC0 sample puppet';
+  model.meta.author='Kokoro2D contributors'; model.meta.license='CC-BY-4.0';
+  model.meta.licenseUrl='https://creativecommons.org/licenses/by/4.0/';
   model.meta.artwork='Original Kokoro2D character with reviewed outlines and painted eyes';
   return finishSampleRig(model,prepared.imageData,prepared.analysis);
 }

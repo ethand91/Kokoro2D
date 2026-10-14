@@ -698,10 +698,17 @@ available. the puppet union still wants more real-world reference drawings
 
 ## license
 
-the engine is MIT licensed. go forth. modify triangles. cause tasteful problems
+the code and documentation use the [MIT license](LICENSE). go forth. modify
+triangles. cause tasteful problems
 
-the bundled Kokoro-chan sample is declared CC0 in its model metadata, which
-means she is free to test with and has absolutely no excuse for missing stand-up
+the bundled Kokoro-chan artwork and sample models use
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). you can share, remix,
+and use them commercially; credit Kokoro2D contributors, link the license, and
+say what you changed. the puppet gets credit even when she misses stand-up
+
+[ASSETS.md](ASSETS.md) lists the covered assets and a copyable credit line;
+[LICENSE-ARTWORK.txt](LICENSE-ARTWORK.txt) contains the full artwork license.
+these licenses do not change the ownership or license of artwork you import.
 
 ---
 
