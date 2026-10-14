@@ -17,7 +17,7 @@
       <button id="openModel" class="primary" type="button">Load .kokoro2d</button>
       <button id="loadSample" type="button" hidden>Bundled sample</button>
       <a class="button" href="./index.html">← Maker</a>
-      <input id="viewerFile" type="file" accept=".kokoro2d,application/json" hidden>
+      <input id="viewerFile" type="file" accept=".kokoro2d,.zip,application/json,application/zip" hidden>
     </div>
   </header>
 
@@ -35,10 +35,32 @@
 
     <aside class="viewer-sidebar panel">
       <h2>Performance</h2>
+      <details class="performance-tools" open><summary>Webcam tracking</summary>
+        <p class="hint">Camera frames stay on this device. Enabling tracking downloads the optional face model on first use.</p>
+        <button id="enableTracking" type="button">Enable webcam</button><button id="calibrateTracking" type="button" disabled>Calibrate neutral face</button>
+        <label>Sensitivity<input id="trackingSensitivity" type="range" min=".3" max="2" step=".05" value="1"></label>
+        <label>Smoothing<input id="trackingSmoothing" type="range" min="0" max=".9" step=".05" value=".65"></label>
+        <output id="trackingStatus" class="hint" aria-live="polite"></output>
+      </details>
+      <details class="performance-tools"><summary>Streaming and framing</summary>
+        <label>Zoom<input id="stageZoom" type="range" min=".2" max="2" step=".01" value=".78"></label>
+        <label>Horizontal centre<input id="stageX" type="range" min="-600" max="600" step="1" value="0"></label>
+        <label>Vertical centre<input id="stageY" type="range" min="-600" max="600" step="1" value="0"></label>
+        <label>OBS model path<input id="streamModel" type="text" placeholder="/my-puppet.kokoro2d.zip"></label>
+        <button id="copyStreamUrl" type="button">Copy transparent Viewer URL</button>
+        <label class="checkbox"><input id="listenLocalControls" type="checkbox"> Receive local API controls</label>
+        <label class="checkbox"><input id="broadcastPerformance" type="checkbox"> Send performance to local streaming viewers</label>
+        <p class="hint">For OBS, export your project into the server folder and enter its path. Expression hotkeys: 1–4; 0 clears. Local controls use this server.</p>
+        <output id="streamStatus" class="hint" aria-live="polite"></output>
+      </details>
       <label class="checkbox switch-line"><input id="demoMode" type="checkbox" checked> Procedural performance</label>
       <label class="style-line">Motion style<select id="motionStyle"></select></label>
       <label class="checkbox"><input id="previewTalking" type="checkbox"> Preview talking (no audio)</label>
-      <button id="enableMic" type="button">Enable microphone lip sync</button>
+      <button id="enableMic" type="button" aria-pressed="false">Enable microphone lip sync</button>
+      <label class="field">Microphone input
+        <select id="micDevice" disabled><option value="">Default input</option></select>
+      </label>
+      <p id="micStatus" class="hint" role="status">Microphone is off. Enable it to choose an input.</p>
       <div class="speak-line">
         <textarea id="speakText" aria-label="Text to speak" rows="2" placeholder="Type a line for her to say…">Hello, how are you doing today?</textarea>
         <label class="checkbox"><input id="speechGestures" type="checkbox" checked> Speech gestures</label>
@@ -49,6 +71,13 @@
         <output id="speakStatus" class="hint" aria-live="polite"></output>
         <p class="hint">Nods and question tilts follow your words. Ctrl/⌘ + Enter to speak. Browser speech audio is not included in recordings.</p>
       </div>
+      <details class="performance-tools"><summary>Audio with timed mouth shapes</summary>
+        <label>Audio file<input id="timedAudioFile" type="file" accept="audio/*"></label>
+        <label>Viseme JSON<input id="timedVisemeFile" type="file" accept=".json,application/json"></label>
+        <audio id="timedAudio" controls preload="metadata"></audio>
+        <output id="timedAudioStatus" class="hint" aria-live="polite"></output>
+        <p class="hint">Load a timestamped viseme track from your speech provider or Rhubarb. Mouth shapes follow playback, seeking, and playback speed.</p>
+      </details>
       <div class="record-line">
         <button id="recordButton" type="button">⏺ Record WebM</button>
         <output id="recordStatus" class="hint"></output>
@@ -66,6 +95,7 @@
         </div>
         <output id="tunerStatus" class="hint"></output>
       </details>
+      <details class="performance-tools"><summary>Render performance</summary><output id="renderMetrics" class="hint"></output><a href="./benchmark.html">Open visual benchmark</a></details>
       <div id="viewerControls" class="viewer-controls"></div>
     </aside>
   </main>

@@ -18,8 +18,10 @@
       <button id="newSample" type="button">New sample</button>
       <button id="importModel" type="button">Open</button>
       <button id="exportModel" class="primary" type="button">Export .kokoro2d</button>
+      <button id="exportArchive" type="button">Export project ZIP</button>
+      <button id="recoverProject" type="button">Recovery history</button>
       <a class="button" href="./viewer.html">Open Viewer ↗</a>
-      <input id="modelFile" type="file" accept=".kokoro2d,application/json" hidden>
+      <input id="modelFile" type="file" accept=".kokoro2d,.zip,.ora,application/json,application/zip" hidden>
     </div>
   </header>
 
@@ -60,7 +62,7 @@
       </div>
       <div class="statusbar">
         <span class="status-dot"></span><span id="statusText">Starting Kokoro2D…</span>
-        <span class="format-label">WebGL2 · schema v2</span>
+        <span class="format-label">WebGL2 · schema v3</span>
       </div>
     </section>
 
@@ -72,6 +74,8 @@
           <input id="parameterValue" type="range">
           <input id="parameterNumber" class="number" type="number">
         </div>
+        <label class="checkbox"><input id="combineParameters" type="checkbox"> Combined-pose correction</label>
+        <label>Second channel<select id="secondParameter"></select></label><input id="secondValue" type="range" min="-1" max="1" step=".01" value="0">
         <div class="keyform-line">
           <span id="keyformBadge" class="badge">Preview only</span>
           <button id="createKeyform" class="primary" type="button">Create keyform</button>
@@ -86,6 +90,13 @@
         <div id="layerInspector">
           <label>Layer name<input id="layerName" type="text"></label>
           <label class="checkbox"><input id="layerVisible" type="checkbox"> Visible</label>
+          <button id="editArtwork" type="button">Retouch / replace artwork</button>
+          <label>Blend mode<select id="layerBlend"><option>normal</option><option>multiply</option><option>screen</option><option>overlay</option></select></label>
+          <label>Compositing group<select id="layerGroup"></select></label><button id="createGroup" type="button">Create isolated group</button>
+          <details id="groupInspector"><summary>Group settings</summary><label>Group name<input id="groupName"></label><label>Parent group<select id="groupParent"></select></label>
+          <label>Group opacity<input id="groupOpacity" type="number" min="0" max="1" step=".05"></label><label class="checkbox"><input id="groupVisible" type="checkbox"> Group visible</label>
+          <label>Group blend<select id="groupBlend"><option>normal</option><option>multiply</option><option>screen</option><option>overlay</option></select></label>
+          <label>Group mask<select id="groupMask"></select></label><button id="dissolveGroup" type="button">Dissolve group</button></details>
           <label>Parent deformer<select id="layerParent"></select></label>
           <label>Clip to layer<select id="layerMask"></select></label>
           <label class="checkbox"><input id="layerMaskOnly" type="checkbox"> Deformer / mask only</label>

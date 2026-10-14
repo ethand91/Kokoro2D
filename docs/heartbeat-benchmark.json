@@ -1,0 +1,298 @@
+{
+  "at": "2026-10-14T06:54:05.428108+00:00",
+  "browser": "chromium",
+  "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/143.0.7499.4 Safari/537.36",
+  "viewport": [
+    640,
+    480
+  ],
+  "method": "120 frames after 20 warmup; 10 switches; 30 recorded frames; synthetic independent deformed 8x8 meshes; 10 capture start/stop cycles",
+  "baselineRef": "83c45de3e65582d65a61c4ec7e3348009703ad6c",
+  "before": {
+    "results": [
+      {
+        "name": "small",
+        "layers": 4,
+        "textureSide": 64,
+        "samples": 120,
+        "cpu": {
+          "averageMs": 0.07750000258286795,
+          "p95Ms": 0.19999998807907104,
+          "p99Ms": 0.20000004768371582
+        },
+        "frameInterval": {
+          "averageMs": 14.375,
+          "p95Ms": 17.09999999999991,
+          "p99Ms": 25
+        },
+        "drawCalls": 5,
+        "textureBytes": 65536,
+        "surfaceBytes": 2457600,
+        "loadMs": 245.80000001192093,
+        "switching": {
+          "averageMs": 90.16999999880791,
+          "p95Ms": 388.10000002384186,
+          "p99Ms": 388.10000002384186
+        },
+        "recording": {
+          "frames": 30,
+          "bytes": 9471,
+          "cpu": {
+            "averageMs": 8.913333330551783,
+            "p95Ms": 10,
+            "p99Ms": 10.300000011920929
+          },
+          "tracksReleased": true
+        },
+        "resources": {
+          "layers": 4,
+          "textures": 4,
+          "surfaces": 1
+        }
+      },
+      {
+        "name": "medium",
+        "layers": 32,
+        "textureSide": 128,
+        "samples": 120,
+        "cpu": {
+          "averageMs": 0.40500000019868215,
+          "p95Ms": 0.5,
+          "p99Ms": 0.6000000238418579
+        },
+        "frameInterval": {
+          "averageMs": 15.208333333333334,
+          "p95Ms": 16.80000000000109,
+          "p99Ms": 25.100000000000364
+        },
+        "drawCalls": 33,
+        "textureBytes": 2097152,
+        "surfaceBytes": 2457600,
+        "loadMs": 755,
+        "switching": {
+          "averageMs": 749.65,
+          "p95Ms": 780.4000000357628,
+          "p99Ms": 780.4000000357628
+        },
+        "recording": {
+          "frames": 30,
+          "bytes": 10566,
+          "cpu": {
+            "averageMs": 9.823333338896434,
+            "p95Ms": 10.800000011920929,
+            "p99Ms": 11
+          },
+          "tracksReleased": true
+        },
+        "resources": {
+          "layers": 32,
+          "textures": 32,
+          "surfaces": 1
+        }
+      },
+      {
+        "name": "large",
+        "layers": 128,
+        "textureSide": 256,
+        "samples": 120,
+        "cpu": {
+          "averageMs": 1.3725000003973642,
+          "p95Ms": 1.600000023841858,
+          "p99Ms": 1.899999976158142
+        },
+        "frameInterval": {
+          "averageMs": 17.28666666666668,
+          "p95Ms": 24.900000000001455,
+          "p99Ms": 25.400000000001455
+        },
+        "drawCalls": 129,
+        "textureBytes": 33554432,
+        "surfaceBytes": 2457600,
+        "loadMs": 3007.300000011921,
+        "switching": {
+          "averageMs": 3051.85,
+          "p95Ms": 3192.699999988079,
+          "p99Ms": 3192.699999988079
+        },
+        "recording": {
+          "frames": 30,
+          "bytes": 13284,
+          "cpu": {
+            "averageMs": 12.186666657527288,
+            "p95Ms": 13.300000011920929,
+            "p99Ms": 13.599999964237213
+          },
+          "tracksReleased": true
+        },
+        "resources": {
+          "layers": 128,
+          "textures": 128,
+          "surfaces": 1
+        }
+      }
+    ],
+    "recordingCycles": {
+      "count": 10,
+      "videoTracksReleased": 10
+    },
+    "disposed": {
+      "layers": 0,
+      "textures": 0,
+      "surfaces": 0
+    }
+  },
+  "after": {
+    "results": [
+      {
+        "name": "small",
+        "layers": 4,
+        "textureSide": 64,
+        "samples": 120,
+        "cpu": {
+          "averageMs": 0.20666666626930236,
+          "p95Ms": 0.30000001192092896,
+          "p99Ms": 0.3999999761581421
+        },
+        "frameInterval": {
+          "averageMs": 14.235000000000037,
+          "p95Ms": 17,
+          "p99Ms": 17.39999999999418
+        },
+        "drawCalls": 5,
+        "textureBytes": 65536,
+        "surfaceBytes": 2457600,
+        "loadMs": 94.10000002384186,
+        "switching": {
+          "averageMs": 100.11000000238418,
+          "p95Ms": 147.69999998807907,
+          "p99Ms": 147.69999998807907
+        },
+        "recording": {
+          "frames": 30,
+          "bytes": 9472,
+          "cpu": {
+            "averageMs": 9.216666672627131,
+            "p95Ms": 10.199999988079071,
+            "p99Ms": 11
+          },
+          "tracksReleased": true
+        },
+        "resources": {
+          "state": "ready",
+          "loading": false,
+          "layers": 4,
+          "textures": 4,
+          "surfaces": 1,
+          "frameMs": 0.19999998807907104,
+          "textureBytes": 65536,
+          "surfaceBytes": 2457600,
+          "drawCalls": 5,
+          "uploads": 0
+        }
+      },
+      {
+        "name": "medium",
+        "layers": 32,
+        "textureSide": 128,
+        "samples": 120,
+        "cpu": {
+          "averageMs": 0.6066666622956594,
+          "p95Ms": 0.800000011920929,
+          "p99Ms": 0.800000011920929
+        },
+        "frameInterval": {
+          "averageMs": 15.06916666666669,
+          "p95Ms": 16.90000000000873,
+          "p99Ms": 17.69999999999709
+        },
+        "drawCalls": 33,
+        "textureBytes": 2097152,
+        "surfaceBytes": 2457600,
+        "loadMs": 738.6000000238419,
+        "switching": {
+          "averageMs": 757.35,
+          "p95Ms": 835.6000000238419,
+          "p99Ms": 835.6000000238419
+        },
+        "recording": {
+          "frames": 30,
+          "bytes": 10566,
+          "cpu": {
+            "averageMs": 9.686666661500931,
+            "p95Ms": 10.699999988079071,
+            "p99Ms": 11.699999988079071
+          },
+          "tracksReleased": true
+        },
+        "resources": {
+          "state": "ready",
+          "loading": false,
+          "layers": 32,
+          "textures": 32,
+          "surfaces": 1,
+          "frameMs": 0.800000011920929,
+          "textureBytes": 2097152,
+          "surfaceBytes": 2457600,
+          "drawCalls": 33,
+          "uploads": 0
+        }
+      },
+      {
+        "name": "large",
+        "layers": 128,
+        "textureSide": 256,
+        "samples": 120,
+        "cpu": {
+          "averageMs": 2.0024999991059302,
+          "p95Ms": 2.300000011920929,
+          "p99Ms": 2.400000035762787
+        },
+        "frameInterval": {
+          "averageMs": 17.360833333333357,
+          "p95Ms": 25,
+          "p99Ms": 25.19999999999709
+        },
+        "drawCalls": 129,
+        "textureBytes": 33554432,
+        "surfaceBytes": 2457600,
+        "loadMs": 3032.899999976158,
+        "switching": {
+          "averageMs": 3012.45,
+          "p95Ms": 3114.800000011921,
+          "p99Ms": 3114.800000011921
+        },
+        "recording": {
+          "frames": 30,
+          "bytes": 13284,
+          "cpu": {
+            "averageMs": 12.149999998013179,
+            "p95Ms": 13.599999964237213,
+            "p99Ms": 14.300000011920929
+          },
+          "tracksReleased": true
+        },
+        "resources": {
+          "state": "ready",
+          "loading": false,
+          "layers": 128,
+          "textures": 128,
+          "surfaces": 1,
+          "frameMs": 2,
+          "textureBytes": 33554432,
+          "surfaceBytes": 2457600,
+          "drawCalls": 129,
+          "uploads": 0
+        }
+      }
+    ],
+    "recordingCycles": {
+      "count": 10,
+      "videoTracksReleased": 10
+    },
+    "disposed": {
+      "layers": 0,
+      "textures": 0,
+      "surfaces": 0
+    }
+  }
+}

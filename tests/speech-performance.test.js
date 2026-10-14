@@ -64,7 +64,9 @@ test("speech uses declared motion channels, preserves expressions, and yields ga
   assert.ok(speaking.pose["eyes.blink"] > 0.5);
   assert.equal(speaking.pose["expr.happy"], undefined);
   assert.equal(speaking.pose["body.breathe"], undefined);
-  for (let t = 1010; t <= 1800; t += 10) {
+  // The head carries mass, so the gesture eases out over about a second
+  // rather than vanishing; give it time to settle all the way.
+  for (let t = 1010; t <= 3800; t += 10) {
     baseline.update(t, model, { gaze });
     speaking.update(t, model, { gaze });
   }

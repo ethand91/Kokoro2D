@@ -1,3 +1,4 @@
+import { paintStroke } from "./art-editor.js";
 import { applyAnimeLandmarks, detectAnimeLandmarks } from "./anime-landmarks.js";
 import { defaultRegions, fitRegions, validateRegions } from './layered-rig.js';
 import { analyzeImageData, PROPORTIONS } from './auto-rigger.js';
@@ -7,8 +8,10 @@ import { addRegionContours, resetRegionContour, recoverClosedMouth, fitContourTo
 export function reviewRegions(dialog, prepared) {
   return new Promise((resolve,reject)=> {
     const { imageData, faceOnly = false }=prepared;
-    const visibleRegion=name=>!faceOnly || ['face',...FEATURE_REGIONS].includes(name);
+    const visibleRegion=name=>!faceOnly || ['face',...FEATURE_REGIONS,'leftLid','rightLid'].includes(name);
     let regions=addRegionContours(structuredClone(prepared.regions),imageData), analysis=prepared.analysis;
+    const addLids=()=>{for(const side of ['left','right'])if(!regions[`${side}Lid`])regions[`${side}Lid`]=structuredClone(regions[`${side}Eye`]);};
+    addLids();
     let selectedPoint=-1, drag=null;
     const history=[], future=[];
     const panel=document.createElement('section'); panel.className='region-editor';
@@ -18,6 +21,10 @@ export function reviewRegions(dialog, prepared) {
       <label>Proportions<select class="style-select"></select></label>
       <button type="button" class="detect-style" hidden>Detect with Ollama</button>
       <p class="hint">Switching proportions re-estimates all outlines. Undo restores your edits.</p>
+      <label class="checkbox"><input class="preserve-eyes" type="checkbox" checked> Preserve painted eyes and lashes</label>
+      <p class="hint">Eye regions erase the source paint. Left/right lid outlines define the opening inside the lashes.</p>
+      <label>Editing tool<select class="ownership-tool"><option value="outline">Outline</option><option value="claim">Claim pixels for this part</option><option value="exclude">Exclude pixels from this part</option><option value="clear">Clear brush override</option></select></label>
+      <label>Ownership brush<input class="ownership-radius" type="range" min="2" max="50" value="12"></label>
       <label>Region<select class="region-select"></select></label>
       <div class="mouth-options" hidden><label class="checkbox"><input type="checkbox" class="mouth-closed"> Source mouth is closed</label><p>Place the mouth over the lip line. This keeps the drawn lips at rest and generates an opening for talking. Flattened or crossed lip outlines are repaired automatically.</p></div>
       <div class="region-tools"><button type="button" class="region-undo">Undo outline</button><button type="button" class="region-redo">Redo</button><button type="button" class="region-fit">Fit to nearby edges</button><button type="button" class="region-reset">Reset outline</button></div>
@@ -50,7 +57,7 @@ export function reviewRegions(dialog, prepared) {
       checkpoint();styleSelect.value=style;analysis=analyzeImageData(imageData,style);
       animeStatus.textContent='Using estimated outlines. Choose Detect anime landmarks to re-detect.';
       regions=addRegionContours(fitRegions(defaultRegions(analysis),imageData.width,imageData.height),imageData);
-      regions.mouth.sourceClosed=sourceClosed;
+      regions.mouth.sourceClosed=sourceClosed;addLids();
       selectedPoint=-1;draw();
     };
     styleSelect.addEventListener('change',()=>applyStyle(styleSelect.value));
@@ -66,7 +73,7 @@ export function reviewRegions(dialog, prepared) {
         const next=applyAnimeLandmarks(analysis,result,imageData.width,imageData.height);
         checkpoint();analysis=next;styleSelect.value='anime';
         regions=addRegionContours(fitRegions(defaultRegions(analysis),imageData.width,imageData.height),imageData);
-        selectedPoint=-1;draw();animeStatus.textContent='Anime landmarks applied. Undo restores your previous outlines.';
+        addLids();selectedPoint=-1;draw();animeStatus.textContent='Anime landmarks applied. Undo restores your previous outlines.';
       } catch(e) {if(panel.isConnected)animeStatus.textContent=e.message;}
       finally {panel.inert=false;}
     });
@@ -117,6 +124,8 @@ export function reviewRegions(dialog, prepared) {
         feedback.textContent='Closed lip outline repaired automatically. The rig will generate the talking opening.';
       }
       context.putImageData(imageData,0,0);
+      const activeMask=regions[select.value]?.paintMask;
+      if(activeMask){context.save();for(let i=0;i<activeMask.length;i++)if(activeMask[i]){context.fillStyle=activeMask[i]===1?'rgba(60,240,190,.45)':'rgba(255,60,100,.45)';context.fillRect(i%canvas.width,Math.floor(i/canvas.width),1,1);}context.restore();}
       const scale=displayScale();
       for(const [name,r] of Object.entries(regions)) {
         if(!visibleRegion(name))continue;
@@ -144,6 +153,12 @@ export function reviewRegions(dialog, prepared) {
     canvas.addEventListener('pointerdown',e=>{
       if(e.button!==0)return;
       canvas.focus({preventScroll:true});const p=point(e);let r=regions[select.value];
+      const tool=panel.querySelector('.ownership-tool').value;
+      if(tool!=='outline'){
+        if(!['face','bangs','leftHair','rightHair','backHair'].includes(select.value)){feedback.textContent='Ownership brushes apply to face and hair parts. Use Outline for facial features.';return;}
+        checkpoint();r.paintMask??=new Uint8Array(canvas.width*canvas.height);drag={brush:true,...p};canvas.setPointerCapture(e.pointerId);
+        paintStroke(r.paintMask,canvas.width,canvas.height,p,p,Number(panel.querySelector('.ownership-radius').value),tool==='claim'?1:tool==='exclude'?2:0);draw();return;
+      }
       const distances=r.contour.map(([x,y])=>Math.hypot(x-p.x,y-p.y));
       selectedPoint=distances.indexOf(Math.min(...distances));
       if(distances[selectedPoint]>10*displayScale())selectedPoint=-1;
@@ -156,6 +171,7 @@ export function reviewRegions(dialog, prepared) {
     });
     canvas.addEventListener('pointermove',e=>{
       if(!drag)return;const p=point(e),r=regions[select.value],b=drag.region;
+      if(drag.brush){const tool=panel.querySelector('.ownership-tool').value;paintStroke(r.paintMask,canvas.width,canvas.height,drag,p,Number(panel.querySelector('.ownership-radius').value),tool==='claim'?1:tool==='exclude'?2:0);drag.x=p.x;drag.y=p.y;draw();return;}
       const clamp=(v,min,max)=>Math.max(min,Math.min(max,v));
       if(drag.index>=0) {
         r.contour[drag.index]=[clamp(p.x,0,canvas.width),clamp(p.y,0,canvas.height)];updateContourBounds(r);
@@ -188,7 +204,7 @@ export function reviewRegions(dialog, prepared) {
     const cleanup=()=>{visionController.abort();panel.remove();dialog.removeEventListener('close',cancel);};
     const cancel=()=>{cleanup();reject(new Error('Rig creation cancelled.'));};
     dialog.addEventListener('close',cancel,{once:true});
-    build.addEventListener('click',()=>{try{recoverClosedMouth(regions.mouth,canvas.width,canvas.height);validateRegions(regions,canvas.width,canvas.height,{ faceOnly });cleanup();resolve({regions,analysis});}catch(e){error.textContent=e.message;}});
+    build.addEventListener('click',()=>{try{recoverClosedMouth(regions.mouth,canvas.width,canvas.height);validateRegions(regions,canvas.width,canvas.height,{ faceOnly });cleanup();resolve({regions,analysis,preserveEyes:panel.querySelector(".preserve-eyes").checked});}catch(e){error.textContent=e.message;}});
     draw();panel.scrollIntoView({block:'nearest'});
   });
 }

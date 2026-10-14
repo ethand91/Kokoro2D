@@ -1,4 +1,5 @@
 """Reviewed default rig: run with npm start and Python Playwright installed."""
+import os
 import asyncio
 import base64
 import json
@@ -12,7 +13,7 @@ async def main():
         browser = await p.chromium.launch(headless=True)
         page = await browser.new_page(viewport={"width": 1440, "height": 1000})
         page.on("pageerror", lambda error: errors.append(str(error)))
-        await page.goto("http://127.0.0.1:5173/", wait_until="networkidle")
+        await page.goto(os.environ.get("KOKORO_TEST_URL", "http://127.0.0.1:5173") + '/', wait_until="networkidle")
         await page.wait_for_function("document.querySelectorAll('#layerList .layer-row').length === 18")
         async with page.expect_download() as info:
             await page.click("#exportModel")
@@ -20,7 +21,7 @@ async def main():
         assert model["meta"]["rigRevision"] == 4
         assert model["meta"]["regions"]["mouth"]["sourceClosed"]
         assert any(layer["name"] == "Mouth • original closed lips" for layer in model["layers"])
-        await page.goto("http://127.0.0.1:5173/viewer.html", wait_until="networkidle")
+        await page.goto(os.environ.get("KOKORO_TEST_URL", "http://127.0.0.1:5173") + '/viewer.html', wait_until="networkidle")
         await page.wait_for_selector('input[data-parameter="mouth.open"]')
         assert "from the Maker" in await page.locator("#viewerStatus").inner_text()
         await page.locator("#viewerFile").set_input_files({"name": "upgraded.kokoro2d", "mimeType": "application/json", "buffer": json.dumps(model).encode()})
@@ -29,7 +30,7 @@ async def main():
 
         # Render in a document without the Viewer animation loop, so changing
         # the preview DOM cannot invalidate its live UI controls.
-        await page.goto("http://127.0.0.1:5173/static/", wait_until="networkidle")
+        await page.goto(os.environ.get("KOKORO_TEST_URL", "http://127.0.0.1:5173") + '/static/', wait_until="networkidle")
 
         report = await page.evaluate("""async (model) => {
           const { KokoroRenderer } = await import('/src/renderer.js');

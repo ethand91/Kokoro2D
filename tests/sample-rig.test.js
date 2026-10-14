@@ -88,3 +88,22 @@ test("sample perspective and posture carry eye attachments without folding cages
   const base = root.mesh.vertices.length - 2 * (root.mesh.columns + 1);
   assert.deepEqual(bounced.slice(base), root.mesh.vertices.slice(base));
 });
+
+test("the jaw stays on the neck through turns and nods", () => {
+  const { model, root, head } = fixture(), defaults = defaultParameterValues(model);
+  // A point on the chin line, carried once by the head cage (as the face is)
+  // and once by the portrait cage alone (as the torso's neck is).
+  const face = model.meta.regions.face, scale = 900 / 1152;
+  const at = { x: (face.x + face.width / 2 - 384) * scale, y: (face.y + face.height - 576) * scale };
+  const chin = createLayer({ name: "Chin", width: 2, height: 2, ...at, columns: 1, rows: 1 });
+  const neck = createLayer({ name: "Neck", width: 2, height: 2, ...at, columns: 1, rows: 1 });
+  bindParent(chin, head); bindParent(neck, root);
+  model.layers.push(chin, neck);
+  for (const values of [{ "head.yaw": 1 }, { "head.yaw": -1 }, { "head.pitch": 1 }, { "head.pitch": -1 }, { "head.yaw": 1, "head.pitch": 1 }]) {
+    const scene = evaluateScene(model, { ...defaults, ...values });
+    const [a, b] = [scene.get(chin.id).vertices, scene.get(neck.id).vertices];
+    // Perspective still moving the jaw slid it 4.6px across the neck.
+    const slide = Math.hypot(a[0] - b[0], a[1] - b[1]);
+    assert.ok(slide < 0.5, `${JSON.stringify(values)} slid the jaw ${slide.toFixed(2)}px over the neck`);
+  }
+});

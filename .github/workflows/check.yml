@@ -1,0 +1,43 @@
+name: Reliability checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: node scripts/check.mjs
+      - run: python3 -m unittest discover -s tests -p 'test_*server.py'
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python3 -m pip install playwright==1.57.0
+      - run: python3 -m playwright install --with-deps ${{ matrix.browser }}
+      - name: Browser hardening and lifecycle
+        env:
+          KOKORO_BROWSER: ${{ matrix.browser }}
+        run: |
+          python3 serve.py > /tmp/kokoro-server.log 2>&1 &
+          trap 'kill $!; cat /tmp/kokoro-server.log' EXIT
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:5173/viewer.html > /dev/null; then break; fi
+            sleep 1
+          done
+          python3 tests/browser_hardening.py
+          python3 tests/browser_lifecycle.py

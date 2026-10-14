@@ -7,8 +7,8 @@
 
 <p align="center">
   <img alt="WebGL2" src="https://img.shields.io/badge/WebGL2-summoned-ff69b4?style=flat">
-  <img alt="Dependencies" src="https://img.shields.io/badge/browser_dependencies-zero-9f7aea?style=flat">
-  <img alt="Schema" src="https://img.shields.io/badge/kokoro2d_schema-v2-f58bd4?style=flat">
+  <img alt="Dependencies" src="https://img.shields.io/badge/core_browser_dependencies-zero-9f7aea?style=flat">
+  <img alt="Schema" src="https://img.shields.io/badge/kokoro2d_schema-v3-f58bd4?style=flat">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-6fe2ba?style=flat">
   <img alt="Status" src="https://img.shields.io/badge/status-alpha%20but%20she%20moves-ff8ed8?style=flat">
 </p>
@@ -32,6 +32,24 @@ the default puppet is now an actual original anime VTuber named Kokoro-chan,
 complete with restrained portrait deformation, clipped pupils, deformable lashes and
 mouth shapes, breathing, softly eased motion, and enough violet hair to
 destabilize a modest graphics card emotionally
+
+## 2026 tools have entered the chat
+
+Paint-preserving eyelids now work on imported rigs, with independent winks,
+squints, brow/jaw controls, and editable combined-pose corrections. The Maker
+adds ownership brushes, layer retouching, OpenRaster import, isolated groups,
+nested masks, and normal/multiply/screen/overlay blending.
+
+The Viewer adds optional local webcam tracking, calibrated facial controls,
+audio-clock viseme playback, expression hotkeys, a transparent OBS view, and a
+local performance API. Project ZIPs store binary artwork; IndexedDB autosaves
+keep recovery history. A visual benchmark includes 24 synthetic portraits and
+two bundled artwork models, plus your own references.
+
+Read the **[2026 tools guide](docs/2026-upgrade.md)** for workflows, schema v3
+compatibility, streaming setup, timed-viseme formats, and checks. Webcam tracking
+loads an optional MediaPipe model; learned hidden-art reconstruction requires a
+separately configured local helper. Manual repair works without it.
 
 ## the body is no longer classified as an optional accessory
 
@@ -68,7 +86,7 @@ and below each eye covers the original drawing underneath. A sparse backing
 layer retains small artwork details that automatic separation drops, including
 the heart hair clip. Head turns add local face perspective, body bounce carries
 the head and shoulders, and softer hair springs keep the seams calmer.
-This upgrade uses the existing v2 model format. Choose **New sample** in the
+The earlier reviewed rig remains compatible with v2; new edits use v3. Choose **New sample** in the
 Maker or **Bundled sample** in the Viewer to load it into an existing session.
 
 - Eye openings clip the irises with WebGL stencil masks. The lashes bend without
@@ -667,19 +685,16 @@ before anyone walks in holding a 900-layer PSD and the confidence of a person
 who has never met a graphics pipeline, this alpha does not yet include:
 
 - PSD import;
-- nested clipping masks and blend modes;
 - learned semantic hair/garment segmentation;
 - animation timelines;
 - a dedicated physics authoring panel;
-- webcam face tracking;
 - Inochi model import; or
 - Live2D `.moc3` loading. no. put it down
 
-the next serious milestone is blend modes, a versioned ZIP container,
-learned segmentation, artist-quality hidden artwork, and
-an adapter for the VTuber agency's performance intents. after that: assisted
-rigging, better mouth forms, expression layers, and whatever else the puppet
-union demands in writing
+the remaining research work is learned semantic segmentation and reliable
+automatic completion of hidden artwork. the local reconstruction adapter can
+connect an external helper, while brushes and artist-painted layers remain
+available. the puppet union still wants more real-world reference drawings
 
 ## license
 
@@ -703,3 +718,15 @@ the mouth closed at rest. Recreate it with `node scripts/create-interviewer.mjs`
 In the Viewer, use **Load .kokoro2d** or drop a file onto the stage. Loaded models
 start playing automatically. **Preview talking (no audio)** demonstrates mouth
 movement without microphone access; microphone lip sync takes priority when on.
+
+### Engine lifecycle (Project Heartbeat)
+
+The renderer now replaces models transactionally and rebuilds its GPU resources
+following WebGL context loss. The current pose and framing survive recovery.
+An interrupted recording is cancelled with a status message; microphone lip-sync
+remains available. In Viewer, enable or disable the microphone explicitly and
+choose an input after granting permission. Switching inputs and leaving the page
+release the microphone's audio graph and tracks.
+
+See [Project Heartbeat Phase 1](docs/project-heartbeat.md) for the inspected
+baseline, prioritized follow-up work, resource ownership and verification.

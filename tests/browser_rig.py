@@ -1,4 +1,5 @@
 """Run against npm start: python3 tests/browser_rig.py (requires Playwright)."""
+import os
 import asyncio
 import json
 from pathlib import Path
@@ -11,14 +12,14 @@ async def main():
         browser=await p.chromium.launch(headless=True)
         page=await browser.new_page(viewport={"width":1440,"height":1000},accept_downloads=True)
         page.on('pageerror',lambda e:errors.append(str(e)))
-        await page.goto('http://127.0.0.1:5173/',wait_until='networkidle')
+        await page.goto(os.environ.get("KOKORO_TEST_URL", "http://127.0.0.1:5173") + '/',wait_until='networkidle')
         await page.wait_for_function("document.querySelectorAll('#layerList .layer-row').length > 10")
         count=await page.locator('#layerList .layer-row').count()
         async with page.expect_download() as info:
             await page.click('#exportModel')
         download=await info.value
         exported=json.loads(Path(await download.path()).read_text())
-        assert exported['version']==2
+        assert exported['version']==3
         assert all(l['source']['src'].startswith('data:') for l in exported['layers'])
         assert len([l for l in exported['layers'] if l.get('clipMask')])==4  # two irises, two star overlays
         expr={p for p in exported['parameters'] if p.startswith('expr.')}
@@ -138,7 +139,7 @@ async def main():
         # The lobe is local: the chest keyform must not move every torso vertex.
         moved=[i for i,o in enumerate(torso['keyforms']['chest.bounce'][0]['offsets']) if abs(o)>1e-6]
         assert 0<len(moved)<len(torso['keyforms']['chest.bounce'][0]['offsets'])*.8,len(moved)
-        await page.goto('http://127.0.0.1:5173/viewer.html',wait_until='networkidle')
+        await page.goto(os.environ.get("KOKORO_TEST_URL", "http://127.0.0.1:5173") + '/viewer.html',wait_until='networkidle')
         await page.wait_for_selector('input[data-parameter="mouth.round"]')
         # The Viewer opens on whatever the Maker has, not on the bundled sample:
         # the puppet you just rigged was otherwise the one thing you could not
@@ -146,7 +147,7 @@ async def main():
         assert 'from the Maker' in await page.locator('#viewerStatus').inner_text()
         assert await page.locator('#loadSample').is_visible()
         await page.click('#loadSample')
-        await page.wait_for_timeout(2500)
+        await page.wait_for_function("document.querySelector('#viewerStatus').textContent.includes('bundled sample')", timeout=30000)
         assert 'bundled sample' in await page.locator('#viewerStatus').inner_text()
         assert not await page.locator('#loadSample').is_visible()
         await page.locator('#demoMode').uncheck()
@@ -180,7 +181,7 @@ async def main():
         assert clipping['outside'][3]==clipping['closed'][3]==0,clipping
         # Import the exported hierarchy and masks.
         await page.locator('#viewerFile').set_input_files({'name':'roundtrip.kokoro2d','mimeType':'application/json','buffer':json.dumps(exported).encode()})
-        await page.wait_for_timeout(300)
+        await page.wait_for_function("document.querySelector('#viewerStatus').textContent.includes('from file')", timeout=30000)
         assert await page.locator('#puppetTitle').inner_text()=='Kokoro-chan'
         # Pointer-driven eyes retain a target between pointer events.
         await page.locator('#demoMode').check()
@@ -293,7 +294,7 @@ async def main():
         assert 'reload' in shapes['empty'],shapes
 
         # Review is required; invalid bounds cannot be built.
-        await page.goto('http://127.0.0.1:5173/',wait_until='networkidle')
+        await page.goto(os.environ.get("KOKORO_TEST_URL", "http://127.0.0.1:5173") + '/',wait_until='networkidle')
         await page.click('#autoRigButton')
         await page.locator('#autoRigInput').set_input_files('static/kokoro-chan.webp')
         await page.wait_for_selector('.region-editor')
@@ -339,7 +340,7 @@ async def main():
         assert await page.locator('#layerList .layer-row').count()==built
         # Files start playing even after a slider/manual pause. Model motion
         # settings travel with the file, and invalid files preserve the puppet.
-        await page.goto('http://127.0.0.1:5173/viewer.html',wait_until='networkidle')
+        await page.goto(os.environ.get("KOKORO_TEST_URL", "http://127.0.0.1:5173") + '/viewer.html',wait_until='networkidle')
         await page.wait_for_selector('input[data-parameter="mouth.open"]')
         await page.uncheck('#demoMode')
         await page.locator('#viewerFile').set_input_files('interviewer.kokoro2d')

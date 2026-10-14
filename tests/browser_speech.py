@@ -3,6 +3,7 @@
 Mock OS speech events to check timing and cancellation deterministically.
 This exercises real rendering and controls, but does not test audible output.
 """
+import os
 import asyncio
 from playwright.async_api import async_playwright
 
@@ -22,7 +23,7 @@ async def main():
             speak: utterance => { window.testSpeech.utterances.push(utterance); }
           }});
         """)
-        await page.goto("http://127.0.0.1:5173/viewer.html", wait_until="networkidle")
+        await page.goto(os.environ.get("KOKORO_TEST_URL", "http://127.0.0.1:5173") + '/viewer.html', wait_until="networkidle")
         await page.wait_for_selector('input[data-parameter="mouth.open"]')
         assert await page.locator("#speechGestures").is_checked()
         # Isolate speech from the occasional resting-mouth movement.

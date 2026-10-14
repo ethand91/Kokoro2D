@@ -39,17 +39,24 @@ export function authorSampleMotion(model, subject) {
   const root = model.layers.find(layer => layer.name === "Portrait Deformer");
   const centerX = (face.x + face.width / 2 - origin.x) * scale - head.transform.x;
   const centerY = (face.y + face.height * .55 - origin.y) * scale - head.transform.y;
+  // The jaw sits on the neck, and the neck is in the torso, which this cage
+  // does not reach. Perspective that still moved the chin slid the jaw 4.6px
+  // across the neck on a turn - a head wobbling on its stalk - so it fades out
+  // between the mouth and the chin, leaving the jaw to the shared cage alone.
+  const jawY = (face.y + face.height * .7 - origin.y) * scale - head.transform.y;
+  const chinY = (face.y + face.height - origin.y) * scale - head.transform.y;
+  const jaw = (y) => 1 - smooth((y - jawY) / (chinY - jawY));
   // Shared motion keeps attachments together; local perspective changes the
   // face's shape instead of simply sliding the portrait sideways.
   for (const d of [-1, 1]) {
     warp(head, "head.yaw", d, (x, y) => {
       const dx = x - centerX, dy = y - centerY;
-      const weight = Math.exp(-((dx / (face.width * scale * .8)) ** 2 + (dy / (face.height * scale * .85)) ** 2));
+      const weight = Math.exp(-((dx / (face.width * scale * .8)) ** 2 + (dy / (face.height * scale * .85)) ** 2)) * jaw(y);
       return [(d * face.width * scale * .035 - dx * .045) * weight, -d * dx * .018 * weight];
     });
     warp(head, "head.pitch", d, (x, y) => {
       const dx = x - centerX, dy = y - centerY;
-      const weight = Math.exp(-((dx / (face.width * scale)) ** 2 + (dy / (face.height * scale)) ** 2));
+      const weight = Math.exp(-((dx / (face.width * scale)) ** 2 + (dy / (face.height * scale)) ** 2)) * jaw(y);
       return [d * dx * .025 * weight, -d * dy * .055 * weight];
     });
     warp(root, "body.bounce", d, (x, y, u, v) => [0, -d * 4 * (1 - smooth((v - .28) / .72))]);

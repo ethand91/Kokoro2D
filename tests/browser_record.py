@@ -1,4 +1,5 @@
 """Run against npm start: python3 tests/browser_record.py (requires Playwright and ffprobe)."""
+import os
 import asyncio
 import json
 import subprocess
@@ -41,7 +42,7 @@ async def main():
         page = await context.new_page()
         errors = []
         page.on('pageerror', lambda error: errors.append(str(error)))
-        await page.goto('http://127.0.0.1:5173/viewer.html')
+        await page.goto(os.environ.get("KOKORO_TEST_URL", "http://127.0.0.1:5173") + '/viewer.html')
         await page.wait_for_function("document.querySelectorAll('#viewerControls .viewer-control').length > 3")
         assert not await page.is_disabled('#recordButton')
 
@@ -69,11 +70,11 @@ async def main():
         # Microphone audio rides along, and stopping the take must not stop the
         # borrowed tracks: the lip sync has to survive its own recording.
         await page.click('#enableMic')
-        await page.wait_for_function("document.querySelector('#enableMic').disabled")
+        await page.wait_for_function("document.querySelector('#enableMic').getAttribute('aria-pressed') === 'true'")
         voiced = await take(page, 2)
         assert [s['codec_type'] for s in probe(voiced)] == ['video', 'audio'], probe(voiced)
         await page.wait_for_timeout(300)
-        assert 'Microphone active' in await page.inner_text('#enableMic')
+        assert 'Disable microphone' in await page.inner_text('#enableMic')
         assert errors == [], errors
 
         # Resizing retargets the renderer's backing store. The take's frame size
