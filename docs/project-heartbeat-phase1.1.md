@@ -114,6 +114,7 @@ Final checks on this checkout:
 | `tests/browser_rig.py`, Chromium | Passed: export/import, gaze, placement and cancellation; no page errors |
 | `tests/browser_record.py`, Chromium | Passed: 940×836 VP9, microphone audio, backdrop, fixed size across mid-take resize; ffmpeg/ffprobe inspected output |
 | Python compile checks and `git diff --check` | Passed |
+| GitHub Actions push/PR runs | Blocked before executing any steps: account payment/spending-limit failure; no hosted test results |
 
 Playwright 1.57.0 was used locally. Camera/worker behavior in the new UI checks is
 mocked to avoid permission UI, hardware and MediaPipe downloads; controller tests
@@ -173,8 +174,12 @@ Python server tests, and Chromium/Firefox hardening and lifecycle checks on push
 and PR. Browser jobs use a fixed Playwright version, a ten-minute bound, a local
 loopback server and process cleanup. Failures propagate nonzero exit status.
 The workflow calls the checked-in recursive checker directly, so it also works
-without the pre-existing local `package.json` edit. Hosted CI status is reported
-separately from the local results above.
+without the pre-existing local `package.json` edit. Hosted CI did not execute: all jobs ended before any steps with the annotation
+that recent account payments failed or the spending limit needs increasing.
+The repository owner must resolve GitHub Billing & plans and rerun the workflow.
+See [the blocked PR run](https://github.com/ethand91/Kokoro2D/actions/runs/38525370572).
+Linux runner execution therefore remains unverified; local passes are not hosted
+CI passes.
 
 Runtime changes: `serve.py`, `src/app.js`, `src/viewer.js`,
 `src/face-tracking.js`, `src/control-api.js`, `src/project-store.js`,
@@ -208,6 +213,10 @@ this review, raw benchmark results, and the Phase 1 documentation link.
 - Synthetic benchmarks cannot prove stable OS/GPU/heap usage over hours, and
   deeply composited/high-resolution artwork has higher surface memory demands.
 
-The focused hardening changes are ready for review/merge on the executed local
-checks. Hosted CI must pass on the actual PR. This assessment does not certify
-untested hardware/deployments or mark later Heartbeat phases complete.
+The focused hardening changes are ready for review on the executed local checks.
+**Merge readiness: Not ready** while hosted CI cannot start because of the account
+billing/spending-limit blocker. Resolve that external setting and require the
+actual PR workflow to pass. This assessment does not certify untested
+hardware/deployments or mark later Heartbeat phases complete.
+
+Pull request: [Kokoro2D #2](https://github.com/ethand91/Kokoro2D/pull/2), against `main`.
