@@ -1,15 +1,20 @@
+import { editArtwork } from "./art-editor.js";
+import { importOpenRaster } from "./openraster.js";
+import { importProject, exportProject, downloadBlob } from "./project-file.js";
+import { projectStore, SnapshotPool } from "./project-store.js";
 import { reviewRegions } from "./region-editor.js";
 import { bindParent, evaluateScene, sceneToLayer } from "./scene.js";
 import { PuppetMotion } from "./motion.js";
 import {
   AUTOSAVE_KEY,
   clone,
+  uid,
+  ensureCorrective,
   createLayer,
   defaultParameterValues,
   ensureKeyform,
   evaluateLayer,
   findKeyform,
-  parseModel,
   removeKeyform,
   safeFilename,
   serializeModel,
@@ -55,11 +60,22 @@ function selectedParameter() {
 
 function activeKeyform(layer = selectedLayer()) {
   if (!layer) return null;
+  if (elements.combineParameters.checked) {
+    return (layer.correctives ?? []).find(pose => Object.keys(pose.drivers).length === 2 && pose.drivers[state.selectedParameterId] === state.values[state.selectedParameterId] && pose.drivers[elements.secondParameter.value] === state.values[elements.secondParameter.value]) ?? null;
+  }
   return findKeyform(layer, state.selectedParameterId, state.values[state.selectedParameterId]);
 }
 
+let snapshotPool = new SnapshotPool();
 function snapshot() {
-  return JSON.stringify({ model: state.model, selectedLayerId: state.selectedLayerId });
+  return snapshotPool.pack({ model: state.model, selectedLayerId: state.selectedLayerId });
+}
+let saveGeneration = 0;
+function persist() {
+  const generation = ++saveGeneration;
+  return projectStore.save({ model: state.model, selectedLayerId: state.selectedLayerId }).then(() => {
+    try { localStorage.setItem(AUTOSAVE_KEY, JSON.stringify({ database: true, at: Date.now() })); } catch { /* IndexedDB remains the primary save. */ }
+  }).catch(error => { if(generation===saveGeneration)setStatus(`Autosave failed: ${error.message}. Export a project to keep your work.`,"bad"); });
 }
 
 function checkpoint() {
@@ -69,7 +85,7 @@ function checkpoint() {
 }
 
 async function restore(serialized) {
-  const saved = JSON.parse(serialized);
+  const saved = snapshotPool.unpack(serialized);
   state.model = saved.model;
   state.selectedLayerId = saved.selectedLayerId;
   state.values = defaultParameterValues(state.model);
@@ -79,10 +95,10 @@ async function restore(serialized) {
 }
 
 function changed(message = "Changes autosaved locally") {
-  state.model.version = 2;
+  state.model.version = 3;
   state.dirty = true;
   state.model.meta.modifiedAt = new Date().toISOString();
-  localStorage.setItem(AUTOSAVE_KEY, snapshot());
+  persist();
   setStatus(message, "good");
   refreshInspector();
 }
@@ -90,14 +106,15 @@ function changed(message = "Changes autosaved locally") {
 async function loadModel(model, message = "Model loaded") {
   const errors = validateModel(model);
   if (errors.length) throw new Error(errors.join("\n"));
+  await renderer.setModel(model);
   state.model = model;
   state.values = defaultParameterValues(model);
   state.selectedLayerId = model.layers.at(-1)?.id ?? null;
+  snapshotPool = new SnapshotPool();
   state.history.length = 0;
   state.future.length = 0;
-  await renderer.setModel(model);
   refreshAll();
-  localStorage.setItem(AUTOSAVE_KEY, snapshot());
+  await persist();
   setStatus(message, "good");
 }
 
@@ -145,12 +162,23 @@ function refreshParameterList() {
     option.selected = parameter.id === state.selectedParameterId;
     elements.parameterSelect.append(option);
   }
+  const previous = elements.secondParameter.value;
+  elements.secondParameter.replaceChildren();
+  for (const parameter of Object.values(state.model.parameters)) if(parameter.id!==state.selectedParameterId) elements.secondParameter.add(new Option(parameter.name,parameter.id));
+  elements.secondParameter.value = state.model.parameters[previous] && previous!==state.selectedParameterId ? previous : Object.keys(state.model.parameters).find(id=>id!==state.selectedParameterId);
+  refreshSecondParameter();
   const parameter = selectedParameter();
   elements.parameterValue.min = parameter.min;
   elements.parameterValue.max = parameter.max;
   elements.parameterValue.step = (parameter.max - parameter.min) / 100;
   elements.parameterValue.value = state.values[parameter.id];
   elements.parameterNumber.value = formatNumber(state.values[parameter.id]);
+}
+
+function refreshSecondParameter() {
+  const p = state.model.parameters[elements.secondParameter.value]; if(!p)return;
+  elements.secondValue.min=p.min;elements.secondValue.max=p.max;elements.secondValue.value=state.values[p.id]??p.default;
+  elements.secondValue.step=(p.max-p.min)/100;
 }
 
 function refreshInspector() {
@@ -165,6 +193,17 @@ function refreshInspector() {
     for (const item of state.model.layers) if (item.id !== layer.id) select.add(new Option(item.name, item.id));
     select.value = value ?? "";
   }
+  elements.layerBlend.value=layer.blendMode??"normal";
+  elements.layerGroup.replaceChildren(new Option("None",""));
+  for(const group of state.model.groups??[])elements.layerGroup.add(new Option(group.name,group.id));
+  elements.layerGroup.value=layer.group??"";
+  const group=state.model.groups?.find(g=>g.id===layer.group);
+  elements.groupInspector.hidden=!group;
+  if(group){
+    elements.groupName.value=group.name;elements.groupOpacity.value=group.opacity??1;elements.groupVisible.checked=group.visible!==false;elements.groupBlend.value=group.blendMode??"normal";
+    elements.groupParent.replaceChildren(new Option("None",""));for(const item of state.model.groups)if(item.id!==group.id)elements.groupParent.add(new Option(item.name,item.id));elements.groupParent.value=group.parent??"";
+    elements.groupMask.replaceChildren(new Option("None",""));for(const item of state.model.layers)elements.groupMask.add(new Option(item.name,item.id));elements.groupMask.value=group.clipMask??"";
+  }
   elements.layerMaskOnly.checked = Boolean(layer.maskOnly);
   elements.layerName.value = layer.name;
   elements.layerVisible.checked = layer.visible;
@@ -176,13 +215,15 @@ function refreshInspector() {
   elements.layerOpacity.value = formatNumber(pose.transform.opacity);
   const key = activeKeyform(layer);
   const parameter = selectedParameter();
-  const atDefault = Math.abs(state.values[parameter.id] - parameter.default) < 1e-6;
+  const atDefault = !elements.combineParameters.checked && Math.abs(state.values[parameter.id] - parameter.default) < 1e-6;
   elements.keyformBadge.textContent = key ? "Editing keyform" : atDefault ? "Editing base mesh" : "Preview only";
   elements.keyformBadge.dataset.active = key ? "true" : "false";
-  elements.createKeyform.disabled = atDefault || Boolean(key);
+  const second=state.model.parameters[elements.secondParameter.value];
+  const invalidCombined=elements.combineParameters.checked && (state.values[parameter.id]===parameter.default || state.values[second.id]===second.default);
+  elements.createKeyform.disabled = atDefault || Boolean(key) || invalidCombined;
   elements.deleteKeyform.disabled = !key;
   const canEditPose = atDefault || Boolean(key);
-  for (const input of elements.layerInspector.querySelectorAll("input[type='number']")) {
+  for (const input of elements.layerInspector.querySelectorAll(".property-grid input[type='number']")) {
     input.disabled = !canEditPose;
   }
   elements.vertexHint.textContent = key
@@ -204,6 +245,7 @@ function formatNumber(value) {
 
 function setOnlySelectedParameter(value) {
   for (const parameter of Object.values(state.model.parameters)) {
+    if(elements.combineParameters.checked && parameter.id===elements.secondParameter.value)continue;
     state.values[parameter.id] = parameter.default;
   }
   state.values[state.selectedParameterId] = Number(value);
@@ -216,7 +258,7 @@ function applyTransform(property, value) {
   const layer = selectedLayer();
   if (!layer || !Number.isFinite(value)) return;
   const parameter = selectedParameter();
-  const atDefault = Math.abs(state.values[parameter.id] - parameter.default) < 1e-6;
+  const atDefault = !elements.combineParameters.checked && Math.abs(state.values[parameter.id] - parameter.default) < 1e-6;
   if (!atDefault && !activeKeyform(layer)) {
     setStatus("Create a keyform before editing this pose", "bad");
     refreshInspector();
@@ -224,13 +266,18 @@ function applyTransform(property, value) {
   }
   checkpoint();
   const key = activeKeyform(layer);
-  if (key) key.transform[property] = value - layer.transform[property];
+  if (key) {
+    const original=key.transform[property];key.transform[property]=0;
+    const rest=evaluateLayer(layer,state.values,state.model.parameters).transform[property];
+    key.transform[property]=Number.isFinite(rest)?value-rest:original;
+  }
   else layer.transform[property] = value;
   changed();
 }
 
 async function downloadModel() {
   try {
+    await projectStore.queue.catch(() => {});
     const portableModel = clone(state.model);
     await Promise.all(portableModel.layers.map(async (layer) => {
       if (layer.source.src.startsWith("data:")) return;
@@ -359,7 +406,8 @@ function animate(timeMs) {
   if (state.model) {
     const pose = motion.update(timeMs, state.model, { active: state.autoplay });
     if (state.autoplay) Object.assign(state.values, pose);
-    renderer.render(state.values);
+    try { renderer.render(state.values); }
+    catch (error) { setStatus(`Rendering interrupted: ${error.message}`, "bad"); }
     drawOverlay();
   }
   requestAnimationFrame(animate);
@@ -381,14 +429,16 @@ elements.createKeyform.addEventListener("click", () => {
   const layer = selectedLayer();
   if (!layer) return;
   checkpoint();
-  ensureKeyform(layer, state.selectedParameterId, state.values[state.selectedParameterId]);
+  if(elements.combineParameters.checked)ensureCorrective(layer,{[state.selectedParameterId]:state.values[state.selectedParameterId],[elements.secondParameter.value]:state.values[elements.secondParameter.value]});
+  else ensureKeyform(layer, state.selectedParameterId, state.values[state.selectedParameterId]);
   changed("Keyform created—sculpt away!");
 });
 elements.deleteKeyform.addEventListener("click", () => {
   const layer = selectedLayer();
   if (!layer) return;
   checkpoint();
-  removeKeyform(layer, state.selectedParameterId, state.values[state.selectedParameterId]);
+  if(elements.combineParameters.checked)layer.correctives=layer.correctives.filter(pose=>pose!==activeKeyform(layer));
+  else removeKeyform(layer, state.selectedParameterId, state.values[state.selectedParameterId]);
   changed("Keyform removed");
 });
 
@@ -449,7 +499,7 @@ elements.layerFiles.addEventListener("change", async () => {
 elements.deleteLayer.addEventListener("click", async () => {
   const layer = selectedLayer();
   if (!layer) return;
-  if (state.model.layers.some(item => item.parent?.id === layer.id || item.clipMask === layer.id)) {
+  if (state.model.layers.some(item => item.parent?.id === layer.id || item.clipMask === layer.id) || state.model.groups?.some(group => group.clipMask === layer.id)) {
     setStatus("Detach child layers and clipping masks before deleting this layer.", "bad");
     return;
   }
@@ -487,10 +537,12 @@ elements.modelAuthor.addEventListener("change", () => {
   changed();
 });
 elements.exportModel.addEventListener("click", downloadModel);
+document.querySelector('a[href="./viewer.html"]').addEventListener("click",async event=>{if(event.metaKey||event.ctrlKey||event.shiftKey)return;event.preventDefault();await projectStore.queue.catch(()=>{});location.href="./viewer.html";});
 elements.importModel.addEventListener("click", () => elements.modelFile.click());
 elements.modelFile.addEventListener("change", async () => {
   try {
-    const model = parseModel(await elements.modelFile.files[0].text());
+    const file=elements.modelFile.files[0];if(!file)return;
+    const model = /\.ora$/i.test(file.name) ? await importOpenRaster(file) : await importProject(file);
     await loadModel(model, "Kokoro2D model imported");
   } catch (error) {
     setStatus(error.message, "bad");
@@ -498,6 +550,35 @@ elements.modelFile.addEventListener("change", async () => {
     elements.modelFile.value = "";
   }
 });
+
+elements.exportArchive.onclick=async()=>{
+  try{downloadBlob(await exportProject(state.model),`${safeFilename(state.model.meta.name)}.kokoro2d.zip`);state.dirty=false;setStatus("Project ZIP exported","good");}
+  catch(error){setStatus(error.message,"bad");}
+};
+elements.recoverProject.onclick=async()=>{
+  try {
+    const revisions=await projectStore.revisions();
+    const dialog=document.createElement("dialog");dialog.className="recovery-dialog";
+    const panel=document.createElement("div");panel.className="dialog-card";panel.innerHTML="<h2>Recovery history</h2><p>Restore a saved revision. Your current project stays in recovery history.</p>";
+    for(const revision of revisions){const button=document.createElement("button");button.type="button";button.textContent=`${revision.name} — ${new Date(revision.at).toLocaleString()}`;button.onclick=async()=>{try{const saved=await projectStore.load(revision);await loadModel(saved.model,"Recovered saved revision");dialog.close();}catch(error){setStatus(error.message,"bad");}};panel.append(button);}
+    const close=document.createElement("button");close.textContent="Close";close.onclick=()=>dialog.close();panel.append(close);dialog.append(panel);document.body.append(dialog);dialog.onclose=()=>dialog.remove();dialog.showModal();
+  }catch(error){setStatus(error.message,"bad");}
+};
+elements.combineParameters.onchange=()=>{refreshSecondParameter();refreshInspector();};
+elements.secondParameter.onchange=()=>{refreshSecondParameter();refreshInspector();};
+elements.secondValue.oninput=()=>{state.values[elements.secondParameter.value]=Number(elements.secondValue.value);refreshInspector();};
+elements.editArtwork.onclick=async()=>{
+  const layer=selectedLayer();if(!layer)return;
+  try{const artwork=await editArtwork(layer);if(!artwork)return;checkpoint();layer.source={...layer.source,src:artwork.src,type:"embedded"};delete layer.source.crop;await renderer.setModel(state.model);changed("Artwork updated");}
+  catch(error){setStatus(error.message,"bad");}
+};
+for(const [id,property] of [["layerBlend","blendMode"],["layerGroup","group"]])elements[id].onchange=()=>{const layer=selectedLayer();if(!layer)return;checkpoint();layer[property]=elements[id].value||null;changed();};
+elements.createGroup.onclick=()=>{const layer=selectedLayer();if(!layer)return;checkpoint();state.model.groups??=[];const group={id:uid("group"),name:"New group",parent:layer.group??null,zIndex:layer.zIndex,opacity:1,visible:true,blendMode:"normal"};state.model.groups.push(group);layer.group=group.id;changed("Isolated group created");elements.groupInspector.open=true;};
+for(const [id,property,convert] of [["groupName","name",v=>v||"Group"],["groupOpacity","opacity",v=>Math.max(0,Math.min(1,Number(v)))],["groupVisible","visible",()=>elements.groupVisible.checked],["groupBlend","blendMode",v=>v],["groupParent","parent",v=>v||null],["groupMask","clipMask",v=>v||null]])elements[id].onchange=()=>{
+  const group=state.model.groups?.find(g=>g.id===selectedLayer()?.group);if(!group)return;const old=group[property],next=convert(elements[id].value);if(Object.is(old,next))return;group[property]=next;
+  const errors=validateModel(state.model);group[property]=old;if(errors.length){refreshInspector();setStatus(errors.join(" "),"bad");return;}checkpoint();group[property]=next;changed("Group updated");
+};
+elements.dissolveGroup.onclick=()=>{const group=state.model.groups?.find(g=>g.id===selectedLayer()?.group);if(!group)return;checkpoint();for(const layer of state.model.layers)if(layer.group===group.id)layer.group=group.parent;for(const child of state.model.groups)if(child.parent===group.id)child.parent=group.parent;state.model.groups=state.model.groups.filter(g=>g!==group);changed("Group dissolved");};
 
 let autoRigPreviewUrl = null;
 
@@ -622,7 +703,7 @@ elements.redo.addEventListener("click", async () => {
 overlay.addEventListener("pointerdown", (event) => {
   const layer = selectedLayer();
   const parameter = selectedParameter();
-  const atDefault = Math.abs(state.values[parameter.id] - parameter.default) < 1e-6;
+  const atDefault = !elements.combineParameters.checked && Math.abs(state.values[parameter.id] - parameter.default) < 1e-6;
   if (!layer || (!atDefault && !activeKeyform(layer))) return;
   const nearest = nearestVertex(event.clientX, event.clientY);
   if (!nearest) return;
@@ -640,8 +721,9 @@ overlay.addEventListener("pointermove", (event) => {
   const valueIndex = state.drag.vertexIndex * 2;
   const key = activeKeyform(layer);
   if (key) {
-    key.offsets[valueIndex] = local.x - layer.mesh.vertices[valueIndex];
-    key.offsets[valueIndex + 1] = local.y - layer.mesh.vertices[valueIndex + 1];
+    key.offsets[valueIndex]=0;key.offsets[valueIndex+1]=0;
+    const rest=evaluateLayer(layer,state.values,state.model.parameters).vertices;
+    key.offsets[valueIndex]=local.x-rest[valueIndex];key.offsets[valueIndex+1]=local.y-rest[valueIndex+1];
   } else {
     layer.mesh.vertices[valueIndex] = local.x;
     layer.mesh.vertices[valueIndex + 1] = local.y;
@@ -673,9 +755,8 @@ window.addEventListener("beforeunload", (event) => {
 
 async function boot() {
   try {
-    const autosave = localStorage.getItem(AUTOSAVE_KEY);
-    if (autosave) {
-      const saved = JSON.parse(autosave);
+    const saved = await projectStore.load();
+    if (saved) {
       await loadModel(saved.model, "Recovered local autosave");
       state.selectedLayerId = saved.selectedLayerId;
       refreshAll();
@@ -684,7 +765,7 @@ async function boot() {
     }
   } catch (error) {
     console.error(error);
-    localStorage.removeItem(AUTOSAVE_KEY);
+    try { localStorage.removeItem(AUTOSAVE_KEY); } catch { /* unavailable storage */ }
     await loadModel(await createLayeredSampleModel(), "Autosave was invalid; loaded sample");
   }
   state.dirty = false;
@@ -692,3 +773,8 @@ async function boot() {
 }
 
 boot();
+
+renderer.addEventListener("contextlost", () => setStatus("Graphics context lost; waiting for recovery.", "bad"));
+renderer.addEventListener("contextrestored", () => setStatus("Graphics recovered · current rig restored", "good"));
+renderer.addEventListener("recoveryerror", event => setStatus(`Graphics recovery failed: ${event.detail.message}. Reload to retry.`, "bad"));
+window.addEventListener("pagehide", event => { if (!event.persisted) renderer.dispose(); });

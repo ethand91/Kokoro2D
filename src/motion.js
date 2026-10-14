@@ -5,23 +5,27 @@ const STEP = 1 / 120;
 // Every timing pair below is [minimum, extra random], in seconds. `calm` is the
 // original performance; `energetic` turns faster, bobs constantly, blinks about
 // twice as often and shifts its weight harder, which the chest springs answer.
+// `headRate` and `bodyRate` are the natural frequencies, in rad/s, of the mass
+// the head and body carry; `bodyFollow` is how far the body turns after the head.
+// `tiltChance` of the times she looks back at you, she tilts her head by up to
+// `tiltGesture` and holds it until she looks away.
 export const STYLES = Object.freeze({
   calm: Object.freeze({
     turnRate: 0.31, turnSize: 0.32, tiltSize: 0.045, bob: 0, speechStrength: 0.7,
-    headDeadZone: 0.3, headGain: 0.55, vorGain: 0.6, tiltFollow: 0,
-    headRate: 9, eyeRate: 22, breathRate: 0.24, microsaccade: 0.016,
+    headDeadZone: 0.3, headGain: 0.55, vorGain: 0.6, tiltFollow: 0, tiltGesture: 0.3, tiltChance: 0.25,
+    headRate: 9, bodyRate: 5, bodyFollow: 0.15, eyeRate: 22, breathRate: 0.24, microsaccade: 0.016,
     blinkGap: [2.2, 3.2], doubleBlink: 0, blinkOnSaccade: 0.2, bounceDrive: 0.32,
     partialBlink: 0.18, lidFollow: 0.32, idleMouth: 0.1,
     shiftGap: [1.8, 3.6], shiftTime: [0.7, 0.5], shiftSize: 0.7, swaySize: 0.45,
     viewerGap: [1.6, 2.2], awayGap: [0.7, 1.6], glanceSize: [0.55, 0.3], settleSize: [0.1, 0.07],
   }),
   energetic: Object.freeze({
-    turnRate: 0.62, turnSize: 0.42, tiltSize: 0.13, bob: 0.05, speechStrength: 1,
-    headDeadZone: 0.16, headGain: 0.95, vorGain: 0.7, tiltFollow: 0.12,
-    headRate: 16, eyeRate: 30, breathRate: 0.3, microsaccade: 0.022,
-    blinkGap: [1.6, 2.7], doubleBlink: 0.25, blinkOnSaccade: 0.22, bounceDrive: 0.15,
+    turnRate: 0.4, turnSize: 0.42, tiltSize: 0.13, bob: 0.05, speechStrength: 1,
+    headDeadZone: 0.16, headGain: 0.95, vorGain: 0.7, tiltFollow: 0.12, tiltGesture: 0.6, tiltChance: 0.45,
+    headRate: 8, bodyRate: 5, bodyFollow: 0.25, eyeRate: 30, breathRate: 0.3, microsaccade: 0.022,
+    blinkGap: [1.6, 2.7], doubleBlink: 0.25, blinkOnSaccade: 0.22, bounceDrive: 0.22,
     partialBlink: 0.25, lidFollow: 0.32, idleMouth: 0.22,
-    shiftGap: [0.8, 1.9], shiftTime: [0.42, 0.35], shiftSize: 0.95, swaySize: 0.6,
+    shiftGap: [1.6, 2.6], shiftTime: [1.0, 0.7], shiftSize: 0.8, swaySize: 0.6,
     viewerGap: [1.1, 1.6], awayGap: [0.5, 1.3], glanceSize: [0.75, 0.38], settleSize: [0.14, 0.09],
   }),
 });
@@ -60,6 +64,32 @@ function pinkDrift(random, base, octaves = 5) {
 // slow start, fast middle, slow stop. An exponential ease is the opposite shape
 // - fastest at the very start - which is why lag-eased motion reads as robotic.
 const minimumJerk = (t) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * t * (10 - 15 * t + 6 * t * t));
+
+// The same minimum-jerk quintic, but leaving its start with whatever velocity
+// and acceleration the previous submovement had. Restarting from rest instead
+// stops the head dead on every retarget, which under a moving cursor is a
+// stutter several times a second. Returns [position, velocity, acceleration].
+function trajectory({ from, to, at, span, velocity = 0, acceleration = 0 }, time) {
+  const t = clamp((time - at) / span, 0, 1);
+  if (t >= 1) return [to, 0, 0];
+  const distance = to - from, v = velocity * span, a = acceleration * span * span;
+  const c3 = 10 * distance - 6 * v - 1.5 * a, c4 = -15 * distance + 8 * v + 1.5 * a, c5 = 6 * distance - 3 * v - 0.5 * a;
+  return [
+    from + t * (v + t * (a / 2 + t * (c3 + t * (c4 + t * c5)))),
+    (v + t * (a + t * (3 * c3 + t * (4 * c4 + t * 5 * c5)))) / span,
+    (a + t * (6 * c3 + t * (12 * c4 + t * 20 * c5))) / (span * span),
+  ];
+}
+
+// A critically damped second-order follower: what gives a Live2D puppet's head
+// and body their weight. A first-order lag has no inertia - it starts at full
+// speed toward every new target - while this one has to accelerate, so a sudden
+// input becomes a turn rather than a twitch. `rate` is its natural frequency.
+function follow(state, target, rate) {
+  state.velocity += (rate * rate * (target - state.position) - 2 * rate * state.velocity) * STEP;
+  state.position += state.velocity * STEP;
+  return state.position;
+}
 
 // Inspiration is about 40% of a breath and expiration the other 60%, so a sine
 // is the wrong shape: a real chest rises faster than it falls.
@@ -102,6 +132,13 @@ export class PuppetMotion {
     this.pitchMove = { from: 0, to: 0, at: -1, span: 1 };
     this.headGaze = 0;
     this.headGazePitch = 0;
+    this.tiltMove = { from: 0, to: 0, at: -1, span: 1 };
+    this.tiltGoal = 0;
+    // Head and body carry mass. `gaze` and `gazePitch` filter only the
+    // gaze-driven share of the head, so the eyes compensate what the head is
+    // actually doing rather than where it was told to go.
+    this.mass = Object.fromEntries(['head.yaw', 'head.pitch', 'head.roll', 'body.sway', 'gaze', 'gazePitch']
+      .map((id) => [id, { position: 0, velocity: 0 }]));
     // Saccades are ballistic: 30-120ms, longer for a larger jump.
     this.saccade = { from: 0, to: 0, at: -1, span: 0.05 };
     this.saccadeY = { from: 0, to: 0, at: -1, span: 0.05 };
@@ -136,6 +173,11 @@ export class PuppetMotion {
         y: this.atViewer ? (this.random() * 2 - 1) * spreadY : away(spreadY),
         until: this.time + gap(this.random, this.atViewer ? style.viewerGap : style.awayGap),
       };
+      // Meeting your eye is when a head tilt happens: the attentive, curious
+      // look that most of a VTuber's charm rides on. A tilt held through
+      // looking away would read as a crick in the neck, so that clears it.
+      const tilt = this.random() < style.tiltChance, side = this.random() < 0.5 ? -1 : 1, size = 0.6 + this.random() * 0.4;
+      this.tiltGoal = this.atViewer && tilt ? side * size * style.tiltGesture : 0;
       // Fixations end with a saccade or a blink, and often both: a large gaze
       // shift frequently carries a blink with it.
       if (Math.abs(this.attention.x - previous) > 0.35 && this.random() < style.blinkOnSaccade) {
@@ -146,15 +188,14 @@ export class PuppetMotion {
   }
 
   // Retarget a submovement only when the goal has really moved, so submovements
-  // stay discrete instead of smearing into a continuous chase.
-  submove(move, goal, current, span, threshold) {
+  // stay discrete instead of smearing into a continuous chase. A retarget picks
+  // up from where the current one is, at the speed it is going.
+  submove(move, goal, span, threshold) {
     if (move.at < 0 || Math.abs(goal - move.to) > threshold) {
-      move.from = current;
-      move.to = goal;
-      move.at = this.time;
-      move.span = span;
+      const [from, velocity, acceleration] = trajectory(move, this.time);
+      Object.assign(move, { from, to: goal, at: this.time, span, velocity, acceleration });
     }
-    return move.from + (move.to - move.from) * minimumJerk((this.time - move.at) / move.span);
+    return trajectory(move, this.time)[0];
   }
 
   // A resting face has a closed mouth. The old idle ran a speech animation with
@@ -198,7 +239,7 @@ export class PuppetMotion {
       return shift.to;
     }
     if (this.time <= shift.at) return shift.from;
-    return shift.from + (shift.to - shift.from) * smooth((this.time - shift.at) / shift.duration);
+    return shift.from + (shift.to - shift.from) * minimumJerk((this.time - shift.at) / shift.duration);
   }
 
   // `mouth` is the general external mouth drive, {open, round, form}; whatever
@@ -246,32 +287,42 @@ export class PuppetMotion {
     // needs cancelling while it is carrying the eyes to a target, and
     // compensating the idle drift too leaves the eyes sliding against every
     // movement the head makes, which reads as dead rather than alive.
-    // Head: a discrete submovement per gaze shift, on a minimum-jerk curve.
+    // Head: a discrete submovement per gaze shift, on a minimum-jerk curve,
+    // then carried through the head's mass.
     const headGoalX = headReach(look.x);
     const headGoalY = headReach(look.y) * 0.6;
-    const headSpan = clamp(0.18 + Math.abs(headGoalX - this.headGaze) * 0.5, 0.12, 0.6);
-    this.headGaze = this.submove(this.headMove, headGoalX, this.headGaze, headSpan, 0.04);
-    this.headGazePitch = this.submove(this.pitchMove, headGoalY, this.headGazePitch, headSpan, 0.04);
+    const headSpan = clamp(0.18 + Math.abs(headGoalX - trajectory(this.headMove, t)[0]) * 0.5, 0.12, 0.6);
+    const aimX = this.submove(this.headMove, headGoalX, headSpan, 0.04);
+    const aimY = this.submove(this.pitchMove, headGoalY, headSpan, 0.04);
+    // Only the idle attention sets a tilt, so a pointer or speech clears it.
+    const tilt = this.submove(this.tiltMove, gaze || speechGaze ? 0 : this.tiltGoal, 0.6, 0.01);
+    this.headGaze = follow(this.mass.gaze, aimX, style.headRate);
+    this.headGazePitch = follow(this.mass.gazePitch, aimY, style.headRate);
     // Eyes: ballistic saccades whose duration grows with the distance jumped,
     // 30ms for a flick and up to 120ms for a large one - the main sequence.
     const eyeGoalX = clamp(look.x - this.headGaze * style.vorGain);
     const eyeGoalY = clamp(look.y - this.headGazePitch * style.vorGain);
-    const saccadeSpan = (goal, current) => clamp(0.03 + Math.abs(goal - current) * 0.11, 0.03, 0.12);
-    const eyeX = this.submove(this.saccade, eyeGoalX, this.saccade.to, saccadeSpan(eyeGoalX, this.saccade.to), 0.02);
-    const eyeY = this.submove(this.saccadeY, eyeGoalY, this.saccadeY.to, saccadeSpan(eyeGoalY, this.saccadeY.to), 0.02);
+    const saccadeSpan = (goal, move) => clamp(0.03 + Math.abs(goal - trajectory(move, t)[0]) * 0.11, 0.03, 0.12);
+    const eyeX = this.submove(this.saccade, eyeGoalX, saccadeSpan(eyeGoalX, this.saccade), 0.02);
+    const eyeY = this.submove(this.saccadeY, eyeGoalY, saccadeSpan(eyeGoalY, this.saccadeY), 0.02);
     // Between saccades the eye drifts slowly, under a degree, then a
     // microsaccade corrects it. A perfectly fixed eye reads as a glass one.
     const eyeDrift = this.drift(t * 0.55) * 0.006;
     const eyeDriftY = this.driftY(t * 0.5) * 0.004;
+    // Head targets take the unfiltered aim: they pass through the same mass
+    // that turned it into headGaze, so filtering it here too would lag twice.
     const targets = {
-      'head.yaw': yaw + this.headGaze + shift * 0.07 + bob * 0.35 + (speech?.yaw ?? 0) * speechStrength,
-      'head.pitch': pitchIdle + this.headGazePitch + bob + (speech?.pitch ?? 0) * speechStrength,
+      'head.yaw': yaw + aimX + shift * 0.07 + bob * 0.35 + (speech?.yaw ?? 0) * speechStrength,
+      'head.pitch': pitchIdle + aimY + bob + (speech?.pitch ?? 0) * speechStrength,
       // Tilting into the glance is what makes a fast turn read as a head turn.
-      'head.roll': -yaw * 0.22 + this.rollNoise(t * 0.5) * style.tiltSize - shift * 0.05 - look.x * style.tiltFollow + (speech?.roll ?? 0) * speechStrength,
-      'body.sway': this.swayNoise(t * 0.42) * 0.22 + shift * style.swaySize + (speech?.sway ?? 0) * speechStrength,
+      'head.roll': -yaw * 0.22 + this.rollNoise(t * 0.5) * style.tiltSize - shift * 0.05 - aimX * style.tiltFollow + tilt + (speech?.roll ?? 0) * speechStrength,
+      // The body follows the head round, as a Live2D body angle follows the
+      // face angle; a body that ignores the head reads as a cut-out behind it.
+      'body.sway': this.swayNoise(t * 0.42) * 0.22 + shift * style.swaySize + (this.pose['head.yaw'] ?? 0) * style.bodyFollow
+        + (speech?.sway ?? 0) * speechStrength,
       'body.breathe': breathe,
-      // bounceDrive is per style: energetic shifts weight ~2x faster, so the
-      // same coefficient would pin the chest springs at their limit.
+      // bounceDrive is per style: energetic shifts weight faster than calm, so
+      // calm's coefficient would pin the chest springs at their limit.
       'body.bounce': clamp(breathe * 0.45 + shiftRate * style.bounceDrive),
       // The eyes arrive first and then hold the target while the head catches
       // up, counter-rotating in the orbit as it arrives. That counter-rotation
@@ -286,12 +337,17 @@ export class PuppetMotion {
     for (const [id, target] of Object.entries(targets)) {
       if (!model.parameters[id]) continue;
       const current = this.pose[id] ?? model.parameters[id].default;
-      // eyes and head already carry their own minimum-jerk trajectories; a lag
-      // on top would flatten the bell-shaped profile back out.
+      const mass = this.mass[id];
+      if (mass) {
+        if (this.pose[id] === undefined) mass.position = current;
+        this.pose[id] = follow(mass, target, id === 'body.sway' ? style.bodyRate : style.headRate);
+        continue;
+      }
+      // The eyes carry their own minimum-jerk saccades; a lag on top would
+      // flatten the bell-shaped profile back out.
       const rate = id === 'mouth.open' ? (target === 0 ? 65 : target > current ? 32 : 24)
         : id.startsWith('eyes.') ? 90
         : id === 'body.bounce' ? 40
-        : id.startsWith('head.') ? 45
         : 9;
       this.pose[id] = current + (target - current) * (1 - Math.exp(-rate * STEP));
       if(id==='mouth.open' && target===0 && this.pose[id]<.006)this.pose[id]=0;

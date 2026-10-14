@@ -37,34 +37,54 @@ export function downloadRecording(blob, name) {
 }
 
 export class StageRecorder {
-  constructor(source, { fps = 60, backdrop = ['#39264c', '#160f1e'] } = {}) {
-    Object.assign(this, { source, fps, backdrop, recorder: null, context: null, chunks: [], startedAt: 0 });
+  constructor(source, { fps = 60, backdrop = ['#39264c', '#160f1e'], onError = () => {}, stopTimeoutMs = 5000 } = {}) {
+    Object.assign(this, { source, fps, backdrop, onError, stopTimeoutMs, recorder: null, context: null, chunks: [], startedAt: 0, stopping: null, stream: null });
   }
 
   get active() { return this.recorder?.state === 'recording'; }
   get elapsedMs() { return this.active ? performance.now() - this.startedAt : 0; }
 
   start(audioTracks = []) {
-    const mimeType = pickMimeType(audioTracks.length > 0);
-    if (!mimeType) throw new Error('this browser cannot record WebM');
-    // Even dimensions: an odd frame size makes some encoders fail silently.
-    const width = Math.max(2, Math.round(this.source.width / 2) * 2);
-    const height = Math.max(2, Math.round(this.source.height / 2) * 2);
-    const canvas = Object.assign(document.createElement('canvas'), { width, height });
-    this.context = canvas.getContext('2d');
-    this.gradient = this.context.createRadialGradient(width / 2, height * .42, 0, width / 2, height * .42, Math.max(width, height) * .62);
-    this.gradient.addColorStop(0, this.backdrop[0]);
-    this.gradient.addColorStop(1, this.backdrop[1]);
-    this.frame();
-    const stream = canvas.captureStream(this.fps);
-    for (const track of audioTracks) stream.addTrack(track);
-    this.chunks = [];
-    this.recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 12e6 });
-    this.recorder.ondataavailable = event => { if (event.data.size) this.chunks.push(event.data); };
-    // Timeslice, so an interrupted take still has everything up to the cut.
-    this.recorder.start(1000);
-    this.startedAt = performance.now();
-    return mimeType;
+    if (this.recorder || this.stopping) throw new Error("A recording is already in progress.");
+    try {
+      const mimeType = pickMimeType(audioTracks.length > 0);
+      if (!mimeType) throw new Error('this browser cannot record WebM');
+      // Even dimensions: an odd frame size makes some encoders fail silently.
+      const width = Math.max(2, Math.round(this.source.width / 2) * 2);
+      const height = Math.max(2, Math.round(this.source.height / 2) * 2);
+      const canvas = Object.assign(document.createElement('canvas'), { width, height });
+      this.context = canvas.getContext('2d');
+      if (!this.context) throw new Error('Unable to create recording canvas.');
+      this.gradient = this.context.createRadialGradient(width / 2, height * .42, 0, width / 2, height * .42, Math.max(width, height) * .62);
+      this.gradient.addColorStop(0, this.backdrop[0]);
+      this.gradient.addColorStop(1, this.backdrop[1]);
+      this.frame();
+      const stream = this.stream = canvas.captureStream(this.fps);
+      for (const track of audioTracks) stream.addTrack(track);
+      this.chunks = [];
+      this.recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 12e6 });
+      this.recorder.ondataavailable = event => { if (event.data.size) this.chunks.push(event.data); };
+      this.recorder.onerror = event => {
+        const error = event.error ?? new Error('MediaRecorder failed.');
+        this.#finish(error);
+        this.onError(error);
+      };
+      this.recorder.onstop = () => {
+        if (this.stopping) this.#finish();
+        else {
+          const error = new Error('Recording ended unexpectedly. The interrupted take was discarded.');
+          this.#finish(error);
+          this.onError(error);
+        }
+      };
+      // Collect periodic chunks while recording; interrupted takes are discarded.
+      this.recorder.start(1000);
+      this.startedAt = performance.now();
+      return mimeType;
+    } catch (error) {
+      this.cancel();
+      throw error;
+    }
   }
 
   // One composited frame per rendered frame. Fitted rather than stretched: the
@@ -79,14 +99,37 @@ export class StageRecorder {
     this.context.drawImage(this.source, (width - w) / 2, (height - h) / 2, w, h);
   }
 
-  async stop() {
-    const recorder = this.recorder;
-    if (!recorder || recorder.state === 'inactive') return null;
-    await new Promise(resolve => { recorder.onstop = resolve; recorder.stop(); });
-    this.recorder = null; this.context = null;
-    // Only the video track is ours. Stopping the borrowed microphone tracks
-    // here would end the lip sync the moment a recording finished.
-    for (const track of recorder.stream.getVideoTracks()) track.stop();
-    return new Blob(this.chunks, { type: 'video/webm' });
+  stop() {
+    if (this.stopping) return this.stopping;
+    if (!this.recorder) return Promise.resolve(null);
+    this.stopping = new Promise((resolve, reject) => { this.resolveStop = resolve; this.rejectStop = reject; });
+    const pending = this.stopping;
+    this.stopTimer = setTimeout(() => this.#finish(new Error('Recording stop timed out.')), this.stopTimeoutMs);
+    try {
+      // An inactive recorder may still have its final data and stop events queued.
+      if (this.recorder.state !== 'inactive') this.recorder.stop();
+    } catch (error) { this.#finish(error); }
+    return pending;
   }
+
+  #finish(error = null, discard = false) {
+    const resolve = this.resolveStop, reject = this.rejectStop;
+    const blob = !error && !discard && this.chunks.length ? new Blob(this.chunks, { type: 'video/webm' }) : null;
+    clearTimeout(this.stopTimer);
+    const recorder = this.recorder;
+    this.recorder = null;
+    if (recorder) {
+      recorder.ondataavailable = recorder.onstop = recorder.onerror = null;
+      try { if (recorder.state !== 'inactive') recorder.stop(); } catch { /* Already interrupted. */ }
+    }
+    // Only video tracks belong to this capture. Audio is borrowed from lip sync.
+    for (const track of this.stream?.getVideoTracks() ?? []) track.stop();
+    this.stream = this.context = this.gradient = null;
+    this.chunks = [];
+    this.stopping = this.resolveStop = this.rejectStop = null;
+    if (error) reject?.(error);
+    else resolve?.(blob);
+  }
+
+  cancel() { this.#finish(null, true); }
 }

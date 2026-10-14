@@ -775,7 +775,7 @@ export async function autoRigFile(file, { onProgress = () => {}, review = null, 
   onProgress("Separating artwork and building the rig", 0.6);
   await new Promise(resolve => requestAnimationFrame(resolve));
   signal?.throwIfAborted();
-  const model = buildLayeredRig(prepared.imageData, analysis, placement, prepared.name, { faceOnly });
+  const model = buildLayeredRig(prepared.imageData, analysis, placement, prepared.name, { faceOnly, preserveEyes: answer?.preserveEyes ?? true });
   const report = {
     confidence: analysis.confidence,
     proportions: PROPORTIONS[analysis.style ?? 'anime'].label,

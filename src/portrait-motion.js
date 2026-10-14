@@ -9,7 +9,11 @@ export function authorPortraitMotion(root, rect, face, subject, scale) {
   const neckX = face.x + face.width / 2;
   const neckY = face.y + face.height;
   const bottom = subject.y + subject.height;
-  const headWeight = y => 1 - smooth((y - neckY) / Math.max(1, face.height * .65));
+  const neckLength = Math.max(1, face.height * .65);
+  const headWeight = y => 1 - smooth((y - neckY) / neckLength);
+  // A head tilts by bending the neck from its base. Pivoting at the chin
+  // instead swung everything below it the opposite way, like scissors.
+  const tiltY = neckY + neckLength;
   const posture = y => smooth((bottom - y) / Math.max(1, bottom - neckY));
   const channels = ['head.yaw', 'head.pitch', 'head.roll', 'body.sway', 'body.breathe'];
   for (const id of channels) for (const d of [-1, 1]) {
@@ -26,9 +30,9 @@ export function authorPortraitMotion(root, rect, face, subject, scale) {
         oy = d * face.height * .035 * weight;
         ox = d * dx * .012 * weight;
       } else if (id === 'head.roll') {
-        const angle = d * .075 * weight;
-        ox = dx*Math.cos(angle)-dy*Math.sin(angle)-dx;
-        oy = dx*Math.sin(angle)+dy*Math.cos(angle)-dy;
+        const angle = d * .075 * weight, ty = y - tiltY;
+        ox = dx*Math.cos(angle)-ty*Math.sin(angle)-dx;
+        oy = dx*Math.sin(angle)+ty*Math.cos(angle)-ty;
       } else if (id === 'body.sway') {
         ox = d * subject.width * .045 * posture(y);
       } else {

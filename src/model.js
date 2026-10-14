@@ -1,15 +1,25 @@
+import { validateModel } from "./model-validation.js";
+import { parseJson, MODEL_LIMITS } from "./import-limits.js";
+export { validateModel, MODEL_LIMITS };
+
 export const SCHEMA = "kokoro2d";
 
 // Where the Maker parks the puppet you are working on. The Viewer reads it so
 // that opening the Viewer shows what you just rigged rather than the sample.
 export const AUTOSAVE_KEY = "kokoro2d-maker-autosave-v1";
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const STANDARD_PARAMETERS = Object.freeze([
   { id: "head.yaw", name: "Head Yaw", min: -1, max: 1, default: 0 },
   { id: "head.pitch", name: "Head Pitch", min: -1, max: 1, default: 0 },
   { id: "head.roll", name: "Head Roll", min: -1, max: 1, default: 0 },
   { id: "eyes.blink", name: "Eye Blink", min: 0, max: 1, default: 0 },
+  { id: "eyes.blinkLeft", name: "Left Blink / Wink", min: 0, max: 1, default: 0 },
+  { id: "eyes.blinkRight", name: "Right Blink / Wink", min: 0, max: 1, default: 0 },
+  { id: "eyes.squint", name: "Squint", min: 0, max: 1, default: 0 },
+  { id: "brows.raise", name: "Brow Raise", min: -1, max: 1, default: 0 },
+  { id: "mouth.smile", name: "Mouth Corners", min: -1, max: 1, default: 0 },
+  { id: "mouth.jaw", name: "Jaw", min: 0, max: 1, default: 0 },
   { id: "eyes.lookX", name: "Eye Look X", min: -1, max: 1, default: 0 },
   { id: "eyes.lookY", name: "Eye Look Y", min: -1, max: 1, default: 0 },
   { id: "mouth.open", name: "Mouth Open", min: 0, max: 1, default: 0 },
@@ -37,7 +47,7 @@ export function createModel(name = "Untitled Puppet") {
       author: "",
       license: "All rights reserved",
       createdAt: new Date().toISOString(),
-      generator: "Kokoro2D Maker 0.1.0",
+      generator: "Kokoro2D Maker 0.2.0",
     },
     canvas: { width: 1000, height: 1000, background: "#24172f" },
     parameters: Object.fromEntries(STANDARD_PARAMETERS.map((parameter) => [
@@ -54,6 +64,7 @@ export function createModel(name = "Untitled Puppet") {
         damping: 0.72,
       },
     ],
+    groups: [],
     layers: [],
   };
 }
@@ -189,6 +200,22 @@ function interpolateKeyforms(keyforms, value, defaultValue, vertexValueCount) {
   return result;
 }
 
+export function ensureCorrective(layer, drivers) {
+  const signature = JSON.stringify(Object.entries(drivers).sort());
+  const correctives = layer.correctives ?? (layer.correctives = []);
+  let pose = correctives.find(item => JSON.stringify(Object.entries(item.drivers).sort()) === signature);
+  if (!pose) { pose = { drivers: { ...drivers }, ...zeroPose(layer.mesh.vertices.length) }; correctives.push(pose); }
+  return pose;
+}
+
+export function correctiveWeight(drivers, parameters, definitions) {
+  return Object.entries(drivers).reduce((weight, [id, target]) => {
+    const base = definitions[id]?.default ?? 0, span = target - base;
+    const t = span ? Math.max(0, Math.min(1, ((parameters[id] ?? base) - base) / span)) : 0;
+    return weight * t * t * (3 - 2 * t);
+  }, 1);
+}
+
 export function evaluateLayer(layer, parameters, parameterDefinitions) {
   const transform = { ...layer.transform };
   const vertices = [...layer.mesh.vertices];
@@ -196,7 +223,11 @@ export function evaluateLayer(layer, parameters, parameterDefinitions) {
   for (const [parameterId, keyforms] of Object.entries(layer.keyforms)) {
     const definition = parameterDefinitions[parameterId];
     if (!definition) continue;
-    const value = Number(parameters[parameterId] ?? definition.default);
+    let value = Number(parameters[parameterId] ?? definition.default);
+    // A single shared blink remains compatible with old rigs. Per-eye closure
+    // and squint drive the same authored lid pose without adding two closures.
+    const side = layer.eyeSide ?? (/^Left /.test(layer.name) ? "Left" : /^Right /.test(layer.name) ? "Right" : null);
+    if (parameterId === "eyes.blink" && side) value = Math.min(1, Math.max(value, Number(parameters[`eyes.blink${side}`] ?? 0), Number(parameters["eyes.squint"] ?? 0) * .7));
     const pose = interpolateKeyforms(
       keyforms,
       value,
@@ -211,6 +242,11 @@ export function evaluateLayer(layer, parameters, parameterDefinitions) {
     }
   }
 
+  for (const corrective of layer.correctives ?? []) {
+    const weight = correctiveWeight(corrective.drivers, parameters, parameterDefinitions);
+    for (const property of Object.keys(transform)) transform[property] += (corrective.transform?.[property] ?? 0) * weight;
+    for (let i = 0; i < vertices.length; i++) vertices[i] += (corrective.offsets?.[i] ?? 0) * weight;
+  }
   transform.opacity = Math.max(0, Math.min(1, transform.opacity));
   return { transform, vertices };
 }
@@ -221,75 +257,8 @@ export function defaultParameterValues(model) {
   );
 }
 
-export function validateModel(candidate) {
-  const errors = [];
-  if (!candidate || typeof candidate !== "object") return ["Model must be an object."];
-  if (candidate.schema !== SCHEMA) errors.push(`schema must be ${SCHEMA}.`);
-  if (![1, SCHEMA_VERSION].includes(candidate.version)) errors.push(`Unsupported schema version ${candidate.version}.`);
-  if (!candidate.meta?.name) errors.push("meta.name is required.");
-  if (!candidate.canvas || candidate.canvas.width <= 0 || candidate.canvas.height <= 0) {
-    errors.push("canvas dimensions must be positive.");
-  }
-  if (!candidate.parameters || typeof candidate.parameters !== "object") {
-    errors.push("parameters must be an object.");
-  }
-  if (!Array.isArray(candidate.layers)) {
-    errors.push("layers must be an array.");
-    return errors;
-  }
-
-  const ids = new Set();
-  candidate.layers.forEach((layer, layerIndex) => {
-    const label = `layers[${layerIndex}]`;
-    if (!layer.id) errors.push(`${label}.id is required.`);
-    if (ids.has(layer.id)) errors.push(`${label}.id must be unique.`);
-    ids.add(layer.id);
-    if (!layer.source?.src) errors.push(`${label}.source.src is required.`);
-    if (!Array.isArray(layer.mesh?.vertices) || layer.mesh.vertices.length % 2 !== 0) {
-      errors.push(`${label}.mesh.vertices must contain x/y pairs.`);
-    }
-    if (!Array.isArray(layer.mesh?.uvs) || layer.mesh.uvs.length !== layer.mesh.vertices?.length) {
-      errors.push(`${label}.mesh.uvs must match vertex count.`);
-    }
-    if (!Array.isArray(layer.mesh?.indices) || layer.mesh.indices.length % 3 !== 0) {
-      errors.push(`${label}.mesh.indices must contain triangles.`);
-    }
-    for (const [parameterId, keyforms] of Object.entries(layer.keyforms ?? {})) {
-      if (!candidate.parameters?.[parameterId]) errors.push(`${label} references unknown ${parameterId}.`);
-      for (const keyform of keyforms) {
-        if (keyform.offsets?.length !== layer.mesh.vertices?.length) {
-          errors.push(`${label} ${parameterId} keyform offsets do not match its mesh.`);
-        }
-      }
-    }
-  });
-  for (const layer of candidate.layers) {
-    if (layer.parent) {
-      const parent = candidate.layers.find(item => item.id === layer.parent.id);
-      const bind = layer.parent.bind;
-      if (!parent) errors.push(`${layer.name}: missing parent.`);
-      if (!bind || !Array.isArray(bind.vertices) || !Array.isArray(bind.indices) || !bind.transform || bind.vertices.length !== parent?.mesh?.vertices?.length || bind.indices.some(i => !Number.isInteger(i) || i < 0 || i * 2 >= bind.vertices.length)) errors.push(`${layer.name}: invalid parent binding.`);
-      const seen = new Set([layer.id]);
-      let next = layer.parent.id;
-      while (next) {
-        if (seen.has(next)) { errors.push(`${layer.name}: cyclic parent hierarchy.`); break; }
-        seen.add(next);
-        next = candidate.layers.find(item => item.id === next)?.parent?.id;
-      }
-    }
-    if (layer.clipMask) {
-      const mask = candidate.layers.find(item => item.id === layer.clipMask);
-      if (!mask || mask.id === layer.id || mask.clipMask) errors.push(`${layer.name}: clipping requires another, unmasked layer.`);
-    }
-    for (const index of layer.mesh?.indices ?? []) {
-      if (!Number.isInteger(index) || index < 0 || index * 2 >= (layer.mesh?.vertices?.length ?? 0)) { errors.push(`${layer.name}: triangle index out of bounds.`); break; }
-    }
-  }
-  return errors;
-}
-
 export function parseModel(text) {
-  const model = JSON.parse(text);
+  const model = parseJson(text);
   const errors = validateModel(model);
   if (errors.length) throw new Error(errors.join("\n"));
   return model;
@@ -298,7 +267,9 @@ export function parseModel(text) {
 export function serializeModel(model) {
   const errors = validateModel(model);
   if (errors.length) throw new Error(errors.join("\n"));
-  return `${JSON.stringify(model, null, 2)}\n`;
+  const text = `${JSON.stringify(model, null, 2)}\n`;
+  if (new TextEncoder().encode(text).length > MODEL_LIMITS.fileBytes) throw new Error("Serialized model exceeds 64 MiB. Use smaller artwork or fewer keyforms.");
+  return text;
 }
 
 export function safeFilename(name) {

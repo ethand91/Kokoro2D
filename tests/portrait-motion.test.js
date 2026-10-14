@@ -45,3 +45,16 @@ test('combined turns, nods, tilts, breathing and sway preserve cage triangle ori
     }
   }
 });
+
+test('a head tilt bends the neck the same way instead of scissoring it',()=>{
+  const {root,model}=fixture();
+  const nearest=(x,y)=>{let best=0,distance=Infinity;for(let i=0;i<root.mesh.uvs.length;i+=2){const d=Math.hypot(root.mesh.uvs[i]*1000-x,root.mesh.uvs[i+1]*1200-y);if(d<distance){distance=d;best=i;}}return best;};
+  const crown=nearest(500,300),neck=nearest(500,760);
+  for(const d of [-1,1]) {
+    const p=evaluateLayer(root,{'head.roll':d},model.parameters).vertices;
+    const crownX=p[crown]-root.mesh.vertices[crown],neckX=p[neck]-root.mesh.vertices[neck];
+    // Pivoting at the chin swung the neck opposite to the crown.
+    assert.ok(Math.sign(crownX)===Math.sign(neckX)&&Math.abs(neckX)>0.5,`crown ${crownX.toFixed(1)} neck ${neckX.toFixed(1)}`);
+    assert.ok(Math.abs(crownX)>Math.abs(neckX),'the head should travel further than the neck');
+  }
+});

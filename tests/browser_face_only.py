@@ -1,4 +1,5 @@
 """Run against npm start: python3 tests/browser_face_only.py (requires Playwright)."""
+import os
 import asyncio
 import json
 from pathlib import Path
@@ -12,7 +13,7 @@ async def main():
         errors = []
         page.on('pageerror', lambda error: errors.append(str(error)))
         page.on('dialog', lambda dialog: dialog.accept())
-        await page.goto('http://127.0.0.1:5173/')
+        await page.goto(os.environ.get("KOKORO_TEST_URL", "http://127.0.0.1:5173") + '/')
         await page.wait_for_function("document.querySelectorAll('#layerList .layer-row').length > 10")
         await page.click('#autoRigButton')
         assert not await page.is_checked('#autoRigFaceOnly')

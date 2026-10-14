@@ -1,3 +1,4 @@
+import { authorPaintedEye } from "./eyelid-rig.js";
 import { authorPortraitMotion } from "./portrait-motion.js";
 import { authorAnimeMouth } from "./anime-mouth.js";
 import { createLayer, createModel, ensureKeyform } from './model.js';
@@ -38,6 +39,10 @@ export function validateRegions(regions, width, height, { faceOnly = false } = {
         ?? (r.contour.some(([x,y])=>x<r.x-.01||y<r.y-.01||x>r.x+r.width+.01||y>r.y+r.height+.01)?'the outline extends outside its bounds':null);
       if(problem)throw new Error(`Adjust ${name}: ${problem}. Select this region and use Undo or Reset outline.${name==='mouth'?' For closed lips, keep a thin loop around the lip line; do not merge the upper and lower points.':''}`);
     }
+  }
+  for (const name of ['leftLid','rightLid']) if(regions[name]) {
+    const r=regions[name];
+    if(![r.x,r.y,r.width,r.height].every(Number.isFinite)||r.x<0||r.y<0||r.width<2||r.height<2||r.x+r.width>width+.01||r.y+r.height>height+.01||!r.contour||contourProblem(r.contour,width,height))throw new Error(`Adjust ${name}: keep a valid opening outline inside the image.`);
   }
   return regions;
 }
@@ -210,7 +215,7 @@ function growRect(r, amount, width, height) {
   };
 }
 
-export function buildLayeredRig(imageData, analysis, regions, name='Layered Puppet', { faceOnly = false } = {}) {
+export function buildLayeredRig(imageData, analysis, regions, name='Layered Puppet', { faceOnly = false, preserveEyes = true } = {}) {
   const {width:w,height:h}=imageData;
   // Also cover direct auto-rig callers that skip the placement editor.
   if(regions.mouth?.sourceClosed) {
@@ -224,6 +229,7 @@ export function buildLayeredRig(imageData, analysis, regions, name='Layered Pupp
   const skin=skinColor(imageData,regions.face), skinCss=`rgb(${skin.join(',')})`;
   model.meta.rigRevision=2;
   model.meta.regions=structuredClone(regions);
+  for (const region of Object.values(model.meta.regions)) delete region.paintMask;
   for(const [id,label,min,max] of [['body.breathe','Breathing',-1,1],['body.bounce','Body Bounce',-1,1],['chest.bounce','Chest Bounce',-1,1],['chest.sway','Chest Sway',-1,1],['hair.bangs','Bangs',-1,1],['hair.left','Left Hair Root',-1,1],['hair.leftTip','Left Hair Tip',-1,1],['hair.right','Right Hair Root',-1,1],['hair.rightTip','Right Hair Tip',-1,1],['hair.back','Back Hair Root',-1,1],['hair.backTip','Back Hair Tip',-1,1],['mouth.round','Mouth Rounded',0,1],['expr.happy','Happy',0,1],['expr.sad','Sad',0,1],['expr.angry','Angry',0,1],['expr.confused','Confused',0,1]]) model.parameters[id]={id,name:label,min,max,default:0};
   model.physics=[
     {id:'back-root',input:'head.yaw',output:'hair.back',strength:-.5,frequency:1.8,damping:.75},
@@ -276,6 +282,11 @@ export function buildLayeredRig(imageData, analysis, regions, name='Layered Pupp
       // Bangs take hair, never skin. Claiming warm pixels above the face box cut
       // the forehead along a dead straight horizontal line at that boundary.
       if(inside(regions.bangs,x,y)&&!warm)part=2;
+      for (const [regionName, partId] of [['face',1],['bangs',2],['leftHair',3],['rightHair',4],['backHair',5]]) {
+        const coverage = regions[regionName].paintMask?.[i];
+        if (coverage === 1) part = partId;
+        else if (coverage === 2 && part === partId) part = 0;
+      }
       // Eyes must not remain baked into bangs: otherwise a blink reveals a second iris.
       if ([regions.leftEye,regions.rightEye,regions.mouth].some(r=>r.contour?inside(r,x,y):ellipse({x:r.x-r.width*.12,y:r.y-r.height*.3,width:r.width*1.24,height:r.height*1.6},x,y))) part=1;
       for(let c=0;c<3;c++)buffers[part].data[o+c]=a[o+c];
@@ -478,6 +489,20 @@ export function buildLayeredRig(imageData, analysis, regions, name='Layered Pupp
       warp(lashes,'expr.confused',1,(x,y,u)=>[0,-askew*eh*scale*.26*(u*.7+.3)]);
     }
   }
+  if (preserveEyes) for (const [side, paint, aperture] of [["Left", regions.leftEye, regions.leftLid ?? regions.leftEye], ["Right", regions.rightEye, regions.rightLid ?? regions.rightEye]]) {
+    authorPaintedEye(model.layers.find(l=>l.name===`${side} Eye Opening`), model.layers.find(l=>l.name===`${side} Iris`), model.layers.find(l=>l.name===`${side} Eyelashes`), aperture, paint, imageData, scale);
+  }
+  if (!faceOnly) {
+    for (const d of [-1, 1]) {
+      warp(faceLayer, 'brows.raise', d, (x,y,u,v) => {
+        const ix = (x + faceLayer.transform.x) / scale + origin.x;
+        const iy = (y + faceLayer.transform.y) / scale + origin.y;
+        const weight = Math.max(...[regions.leftEye, regions.rightEye].map(r=>Math.exp(-(((ix-r.x-r.width/2)/(r.width*.65))**2+((iy-r.y+r.height*.35)/(r.height*.55))**2))));
+        return [0, -d * face.height * scale * .035 * weight];
+      });
+    }
+    warp(faceLayer, 'mouth.jaw', 1, (x,y,u,v)=>[0, face.height*scale*.045*Math.exp(-(((u-.5)/.3)**2))*Math.max(0,(v-.5)*2)]);
+  }
   const mr=mouthOpeningRegion(regions.mouth,h),mw=mr.width,mh=mr.height;
   const mouthShape=mr.contour?`<path d="${contourPath(mr,true)}" fill="#642a3e"/>`:null;
   const mouth=layer('Mouth • open / wide / rounded',mr,svg(mw,mh,`<ellipse cx="${mw/2}" cy="${mh/2}" rx="${mw*.44}" ry="${mh*.45}" fill="#642a3e"/><ellipse cx="${mw/2}" cy="${mh*.76}" rx="${mw*.28}" ry="${mh*.18}" fill="#e68a99"/><path d="M${mw*.22} ${mh*.19}Q${mw*.5} ${mh*.1} ${mw*.78} ${mh*.19}" stroke="#fff4e8" stroke-width="${mh*.12}" fill="none"/>`),6,10,6);bindParent(mouth,faceLayer);
@@ -513,6 +538,10 @@ export function buildLayeredRig(imageData, analysis, regions, name='Layered Pupp
     halfway.offsets=fully.offsets.map(value=>value*.2);
     halfway.transform.scaleY=fully.transform.scaleY*.2;
   }
+  for (const d of [-1, 1]) {
+    warp(mouth, 'mouth.smile', d, (x,y,u,v)=>[0,-d*mh*scale*.22*(u*2-1)**2]);
+    if (originalLips) warp(originalLips, 'mouth.smile', d, (x,y,u,v)=>[0,-d*regions.mouth.height*scale*.5*(u*2-1)**2]);
+  }
   key(mouth,'mouth.form',-1,{scaleX:-.2});key(mouth,'mouth.form',1,{scaleX:.25});
   key(mouth,'mouth.round',1,{scaleX:-.48});
   if((analysis.style??'anime')==='anime')authorAnimeMouth(mouth,originalLips,regions.mouth,mr,scale);
@@ -521,7 +550,7 @@ export function buildLayeredRig(imageData, analysis, regions, name='Layered Pupp
   key(mouth,'expr.angry',1,{scaleX:.2,scaleY:.06,y:mh*scale*.16});
   key(mouth,'expr.confused',1,{scaleX:-.26,scaleY:.04,x:mw*scale*.16});
   if (faceOnly) {
-    const allowed=new Set(['eyes.blink','mouth.open','mouth.form','mouth.round']);
+    const allowed=new Set(['eyes.blink','eyes.blinkLeft','eyes.blinkRight','eyes.squint','mouth.open','mouth.form','mouth.round','mouth.smile']);
     model.parameters=Object.fromEntries(Object.entries(model.parameters).filter(([id])=>allowed.has(id)));
     model.physics=[];
     for(const part of model.layers)for(const id of Object.keys(part.keyforms))if(!allowed.has(id))delete part.keyforms[id];

@@ -1,8 +1,13 @@
-import { speechShape } from "./speech.js";
+import { projectStore } from "./project-store.js";
+import { importProject } from "./project-file.js";
+import { FaceTracker } from "./face-tracking.js";
+import { AudioVisemePlayer } from "./audio-visemes.js";
+import { ControlInbox, parameterCommand, sendControl } from "./control-api.js";
+import { MicrophoneController } from "./microphone.js";
 import { VisemeTalker } from "./viseme-lipsync.js";
 import { buildSpeechPerformance, sampleSpeechPerformance } from "./speech-performance.js";
 import { PuppetMotion, STYLES } from "./motion.js";
-import { AUTOSAVE_KEY, defaultParameterValues, parseModel, validateModel } from "./model.js";
+import { AUTOSAVE_KEY, defaultParameterValues, validateModel } from "./model.js";
 import { KokoroRenderer } from "./renderer.js";
 import { createLayeredSampleModel } from "./sample.js";
 import { StageRecorder, downloadRecording, recordingName, recordingSupported } from "./recorder.js";
@@ -17,11 +22,9 @@ const EXPRESSION_FACES = { "expr.happy": "✨", "expr.sad": "😢", "expr.angry"
 // Show what you just made. The Maker parks its work in localStorage, and a
 // Viewer that ignored it always opened on the bundled sample instead - so the
 // puppet you had just rigged was the one thing you could not look at.
-function makerPuppet() {
+async function makerPuppet() {
   try {
-    const saved = localStorage.getItem(AUTOSAVE_KEY);
-    if (!saved) return null;
-    const candidate = JSON.parse(saved)?.model;
+    const candidate = (await projectStore.load())?.model;
     return validateModel(candidate).length ? null : candidate;
   } catch {
     return null;
@@ -29,13 +32,12 @@ function makerPuppet() {
 }
 
 let source = "sample";
-let model = makerPuppet();
+let model = await makerPuppet();
 if (model) source = "maker";
 else model = await createLayeredSampleModel();
 let values = defaultParameterValues(model);
 let demo = true;
 let microphoneLevel = null;
-let microphoneStream = null;
 const motion = new PuppetMotion({ style: "energetic" });
 let gaze = null;
 let gazeAt = 0;
@@ -87,14 +89,17 @@ function rebuildExpressions() {
     button.className = "expression";
     button.dataset.expression = parameter.id;
     button.textContent = `${EXPRESSION_FACES[parameter.id] ?? "🙂"} ${parameter.name}`;
-    button.addEventListener("click", () => setExpression(parameter.id));
+    button.addEventListener("click", () => {
+      setExpression(parameter.id);
+      if(document.querySelector("#broadcastPerformance").checked)sendControl({type:"expression",id:values[parameter.id]===1?parameter.id:null}).catch(error=>statusMessage(error.message,"bad"));
+    });
     expressionRow.append(button);
   }
   expressionRow.hidden = !expressionRow.childElementCount;
 }
 
-function setExpression(id) {
-  const next = values[id] >= 1 ? null : id;
+function setExpression(id, toggle = true) {
+  const next = toggle && values[id] >= 1 ? null : id;
   for (const parameter of Object.values(model.parameters)) {
     if (parameter.id.startsWith("expr.")) values[parameter.id] = parameter.id === next ? 1 : 0;
   }
@@ -105,9 +110,9 @@ function setExpression(id) {
   syncControls();
 }
 
-function syncControls() {
+function syncControls(pose = values) {
   for (const input of controls.querySelectorAll("input")) {
-    const value = values[input.dataset.parameter];
+    const value = pose[input.dataset.parameter];
     input.value = value;
     input.previousElementSibling.textContent = Number(value).toFixed(2);
   }
@@ -116,15 +121,10 @@ function syncControls() {
 async function setModel(nextModel, nextSource = source) {
   const errors=validateModel(nextModel);
   if(errors.length)throw new Error(errors.join('\n'));
-  const previous=model;
-  try {
-    await renderer.setModel(nextModel);
-  } catch(error) {
-    await renderer.setModel(previous);
-    throw error;
-  }
+  await renderer.setModel(nextModel);
   model=nextModel;source=nextSource;
   stopSpeaking();
+  timedAudio.audio.pause();remoteValues.clear();
   values=defaultParameterValues(model);
   demo=true;document.querySelector('#demoMode').checked=true;
   document.querySelector('#previewTalking').checked=false;
@@ -159,7 +159,7 @@ function queueModel(factory,nextSource) {
 }
 function loadFile(file) {
   if(!file)return;
-  return queueModel(async()=>parseModel(await file.text()),'file');
+  return queueModel(()=>importProject(file),'file');
 }
 
 // Text-driven lip sync. The microphone path can only hear loudness and
@@ -209,23 +209,93 @@ function previewSpeech(timeMs) {
   return {open:Math.min(.8,syllable*.65)*envelope,round:(.5+.5*Math.sin(t*6))*envelope,form:Math.sin(t*4.3)*.45*envelope};
 }
 
+const query = new URLSearchParams(location.search);
+const streamMode = query.get("stream") === "1";
+if(streamMode)document.body.classList.add("stream-mode");
+const finiteQuery = (key, fallback, min, max) => { const value=query.has(key)?Number(query.get(key)):fallback;return Number.isFinite(value)?Math.max(min,Math.min(max,value)):fallback; };
+renderer.camera.zoom=finiteQuery("zoom",.78,.2,2);renderer.camera.x=finiteQuery("x",0,-600,600);renderer.camera.y=finiteQuery("y",0,-600,600);
+for(const [id,key] of [["stageZoom","zoom"],["stageX","x"],["stageY","y"]]){const input=document.querySelector(`#${id}`);input.value=renderer.camera[key];input.oninput=()=>{renderer.camera[key]=Number(input.value);};}
+let trackingPose=null, trackingAt=-Infinity, lastBroadcastAt=0, broadcastBusy=false, lastMetricsAt=0;
+const frameSamples=[], remoteValues=new Map();
+const tracker=new FaceTracker(pose=>{if(pose){trackingPose=pose;trackingAt=performance.now();}},message=>{document.querySelector("#trackingStatus").textContent=message;});
+const trackingButton=document.querySelector("#enableTracking"), calibrateButton=document.querySelector("#calibrateTracking");
+trackingButton.onclick=async()=>{
+  if(tracker.stream){tracker.stop();trackingButton.textContent="Enable webcam";calibrateButton.disabled=true;document.querySelector("#trackingStatus").textContent="Webcam stopped";return;}
+  trackingButton.disabled=true;document.querySelector("#trackingStatus").textContent="Starting camera and downloading the face model…";
+  try{await tracker.start();trackingButton.textContent="Stop webcam";calibrateButton.disabled=false;}
+  catch(error){document.querySelector("#trackingStatus").textContent=`Tracking unavailable: ${error.message}`;}
+  finally{trackingButton.disabled=false;}
+};
+calibrateButton.onclick=()=>{try{tracker.calibrate();document.querySelector("#trackingStatus").textContent="Neutral face calibrated";}catch(error){document.querySelector("#trackingStatus").textContent=error.message;}};
+document.querySelector("#trackingSensitivity").oninput=e=>{tracker.sensitivity=Number(e.target.value);};
+document.querySelector("#trackingSmoothing").oninput=e=>{tracker.smoothing=Number(e.target.value);};
+const timedAudio = new AudioVisemePlayer(document.querySelector("#timedAudio"));
+const timedStatus=document.querySelector("#timedAudioStatus");
+document.querySelector("#timedAudioFile").onchange=e=>{const file=e.target.files[0];if(file){timedAudio.setAudio(file);timedStatus.textContent=`Loaded ${file.name}`;}e.target.value="";};
+document.querySelector("#timedVisemeFile").onchange=async e=>{try{const file=e.target.files[0];if(!file)return;const track=timedAudio.setTrack(await file.text());timedStatus.textContent=`${track.segments.length} mouth shapes · ${(track.totalMs/1000).toFixed(1)} seconds`;}catch(error){timedStatus.textContent=error.message;}finally{e.target.value="";}};
+timedAudio.audio.addEventListener("play",()=>{stopSpeaking();demo=true;document.querySelector("#demoMode").checked=true;timedAudio.prepareAudio().catch(error=>{timedStatus.textContent=error.message;});});
+timedAudio.audio.addEventListener("pause",()=>{mouthReleaseUntil=performance.now()+250;});
+timedAudio.audio.addEventListener("ended",()=>{mouthReleaseUntil=performance.now()+250;});
+document.querySelector("#copyStreamUrl").onclick=async()=>{
+  const url=new URL("./viewer.html",location.href);url.searchParams.set("stream","1");
+  for(const key of ["zoom","x","y"])url.searchParams.set(key,String(renderer.camera[key]));
+  const path=document.querySelector("#streamModel").value.trim();if(path)url.searchParams.set("model",path);
+  try{await navigator.clipboard.writeText(url.href);document.querySelector("#streamStatus").textContent=path?"OBS Browser Source URL copied":"URL copied. OBS uses the bundled sample unless you set a model path.";}
+  catch{document.querySelector("#streamStatus").textContent=url.href;}
+};
+function receiveControl(command){
+  try{
+    if(command.type==="parameters"){
+      if(document.querySelector("#broadcastPerformance").checked && !streamMode)return;
+      const parsed=parameterCommand(command,model.parameters);if(parsed)for(const [id,value] of Object.entries(parsed.values))remoteValues.set(id,{value,until:performance.now()+parsed.holdMs});
+    }else if(command.type==="expression")setExpression(typeof command.id==="string" && command.id.startsWith("expr.") && model.parameters[command.id]?command.id:null,false);
+    else if(command.type==="reset"){remoteValues.clear();values=defaultParameterValues(model);motion.reset();setExpression(null,false);}
+    else if(command.type==="speech" && typeof command.text==="string"){speakTextInput.value=command.text.slice(0,4000);speakButton.click();}
+    else if(command.type==="visemes"){timedAudio.setTrack(command.track);timedStatus.textContent="Timed visemes received";}
+  }catch(error){statusMessage(`Control rejected: ${error.message}`,"bad");}
+}
+let controlInbox=null;
+function listenControls(enabled){controlInbox?.stop();controlInbox=enabled?new ControlInbox(receiveControl):null;controlInbox?.start();}
+document.querySelector("#listenLocalControls").checked=streamMode;
+document.querySelector("#listenLocalControls").onchange=event=>listenControls(event.target.checked);
+document.addEventListener("keydown",event=>{
+  if(event.ctrlKey||event.metaKey||event.altKey||event.target.closest("input,textarea,select,[contenteditable]"))return;
+  if(!/^[0-4]$/.test(event.key))return;event.preventDefault();
+  const id=Object.keys(model.parameters).filter(id=>id.startsWith("expr."))[Number(event.key)-1]??null;
+  setExpression(id);if(document.querySelector("#broadcastPerformance").checked)sendControl({type:"expression",id:id && values[id]===1?id:null}).catch(()=>{});
+});
+window.addEventListener("pagehide", event => {
+  tracker.stop();
+  timedAudio.dispose();
+  controlInbox?.stop();
+  if (event.persisted) microphone.disable();
+  else microphone.dispose();
+  recorder.cancel();
+  resetRecordingControls();
+  if (!event.persisted) renderer.dispose();
+});
+
 function animate(timeMs) {
   if (gaze && timeMs - gazeAt > GAZE_HOLD_MS) gaze = null;
   const spoken = talker.shapeAt(timeMs);
-  const drive = spoken ?? microphoneLevel ?? (timeMs < mouthReleaseUntil ? SILENT_MOUTH
+  const timed = timedAudio.shape();
+  const drive = timed ?? spoken ?? microphoneLevel ?? (timeMs < mouthReleaseUntil ? SILENT_MOUTH
     : document.querySelector('#previewTalking').checked ? previewSpeech(timeMs) : null);
   const speech = speechPerformance && document.querySelector('#speechGestures').checked
     ? sampleSpeechPerformance(speechPerformance, talker.elapsedAt(timeMs)) : null;
   const pose = motion.update(timeMs, model, { active: demo, gaze, mouth: drive, speech });
-  if (demo) {
-    Object.assign(values, pose);
-    if (timeMs - lastControlSync >= 120) {
-      syncControls();
-      lastControlSync = timeMs;
-    }
-  }
-  renderer.render(values);
-  if (recorder.active) {
+  if (demo) Object.assign(values, pose);
+  const rendered = { ...values };
+  const trackingWeight = Math.max(0, 1 - Math.max(0, timeMs-trackingAt-150)/350);
+  if(trackingPose && trackingWeight>0)for(const [id,value] of Object.entries(trackingPose))if(model.parameters[id] && !(drive && id.startsWith("mouth.")))rendered[id]=(rendered[id]??0)*(1-trackingWeight)+value*trackingWeight;
+  for(const [id,entry] of remoteValues){if(timeMs>entry.until){remoteValues.delete(id);continue;}if(model.parameters[id])rendered[id]=entry.value;}
+  if(timeMs-lastControlSync>=120){syncControls(rendered);lastControlSync=timeMs;}
+  try { renderer.render(rendered); }
+  catch (error) { statusMessage(`Rendering interrupted: ${error.message}`, "bad"); }
+  frameSamples.push(renderer.metrics.frameMs);if(frameSamples.length>120)frameSamples.shift();
+  if(timeMs-lastMetricsAt>500){lastMetricsAt=timeMs;const sorted=[...frameSamples].sort((a,b)=>a-b);document.querySelector("#renderMetrics").textContent=`CPU frame p95: ${sorted[Math.floor((sorted.length-1)*.95)].toFixed(1)} ms · textures ${(renderer.metrics.textureBytes/1048576).toFixed(1)} MiB · surfaces ${(renderer.metrics.surfaceBytes/1048576).toFixed(1)} MiB · ${renderer.metrics.drawCalls} draws`;}
+  if(document.querySelector("#broadcastPerformance").checked && !streamMode && timeMs-lastBroadcastAt>100 && !broadcastBusy){lastBroadcastAt=timeMs;broadcastBusy=true;sendControl({type:"parameters",values:rendered,holdMs:300}).catch(()=>{}).finally(()=>{broadcastBusy=false;});}
+  if (recorder.active && renderer.available) {
     recorder.frame();
     if (timeMs - lastRecordSync >= 250) {
       recordStatus.textContent = clock(recorder.elapsedMs);
@@ -243,6 +313,8 @@ const TUNABLE = [
   ["turnSize", "Head turn size", 0, 1, 0.01],
   ["turnRate", "Head turn speed", 0.1, 1.4, 0.01],
   ["tiltSize", "Head tilt", 0, 0.4, 0.005],
+  ["tiltGesture", "Head tilt gestures", 0, 1, 0.05],
+  ["tiltChance", "Tilt how often", 0, 1, 0.05],
   ["bob", "Micro-bob", 0, 0.15, 0.005],
   ["headDeadZone", "Head dead zone", 0, 0.6, 0.01],
   ["headGain", "Head follows gaze", 0, 1.5, 0.05],
@@ -254,6 +326,8 @@ const TUNABLE = [
   ["lidFollow", "Lid follows gaze", 0, 0.8, 0.02],
   ["idleMouth", "Idle mouth movement", 0, 0.6, 0.02],
   ["swaySize", "Body sway", 0, 1, 0.05],
+  ["bodyFollow", "Body follows head", 0, 0.6, 0.01],
+  ["bodyRate", "Body speed", 2, 12, 0.5],
   ["shiftSize", "Weight shift", 0, 1.5, 0.05],
   ["bounceDrive", "Chest jiggle", 0, 0.6, 0.01],
 ];
@@ -360,7 +434,7 @@ window.addEventListener("storage", (event) => {
   if (event.key !== AUTOSAVE_KEY || source !== "maker") return;
   clearTimeout(syncTimer);
   syncTimer = setTimeout(async () => {
-    const updated = makerPuppet();
+    const updated = await makerPuppet();
     if (updated && source==='maker') await queueModel(async()=>updated,'maker');
   }, 400);
 });
@@ -369,33 +443,41 @@ document.querySelector("#demoMode").addEventListener("change", (event) => {
   demo = event.target.checked;
   if (!demo) microphoneLevel = null;
 });
-document.querySelector("#enableMic").addEventListener("click", async () => {
+const micButton = document.querySelector("#enableMic");
+const micDevice = document.querySelector("#micDevice");
+const micStatus = document.querySelector("#micStatus");
+const microphone = new MicrophoneController({
+  onLevel: level => { microphoneLevel = level; },
+  onState: ({ state, message }) => {
+    micButton.textContent = state === "enabled" ? "Disable microphone" : state === "enabling" ? "Cancel microphone request" : "Enable microphone lip sync";
+    micButton.setAttribute("aria-pressed", String(state === "enabled"));
+    micStatus.textContent = message;
+    if (message) statusMessage(message, state === "error" ? "bad" : "neutral");
+  },
+  onDevices: devices => {
+    const selected = micDevice.value;
+    micDevice.replaceChildren(new Option("Default input", ""));
+    devices.forEach((device, index) => {
+      if (device.deviceId && device.deviceId !== "default") micDevice.add(new Option(device.label || `Microphone ${index + 1}`, device.deviceId));
+    });
+    if ([...micDevice.options].some(option => option.value === selected)) micDevice.value = selected;
+    micDevice.disabled = !devices.some(device => device.deviceId && device.deviceId !== "default");
+  },
+});
+async function enableMicrophone() {
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    microphoneStream = stream;
-    const audio = new AudioContext();
-    const analyser = audio.createAnalyser();
-    analyser.fftSize = 1024;
-    analyser.smoothingTimeConstant = 0.55;
-    await audio.resume();
-    audio.createMediaStreamSource(stream).connect(analyser);
-    const samples = new Uint8Array(analyser.fftSize);
-    const spectrum = new Float32Array(analyser.frequencyBinCount);
-    const measure = () => {
-      analyser.getByteTimeDomainData(samples);
-      analyser.getFloatFrequencyData(spectrum);
-      microphoneLevel = speechShape(samples, spectrum, audio.sampleRate, analyser.fftSize);
-      requestAnimationFrame(measure);
-    };
-    measure();
-    demo = true;
-    document.querySelector("#demoMode").checked = true;
-    document.querySelector("#enableMic").textContent = "Microphone active";
-    document.querySelector("#enableMic").disabled = true;
-    statusMessage("Microphone is driving mouth openness and estimated shape", "good");
-  } catch (error) {
-    statusMessage(`Microphone unavailable: ${error.message}`, "bad");
-  }
+    if (await microphone.enable(micDevice.value)) {
+      demo = true;
+      document.querySelector("#demoMode").checked = true;
+    }
+  } catch { /* The controller reports actionable permission/device feedback. */ }
+}
+micButton.addEventListener("click", () => {
+  if (microphone.active || microphone.state === "enabling") microphone.disable();
+  else enableMicrophone();
+});
+micDevice.addEventListener("change", () => {
+  if (microphone.active || microphone.state === "enabling") enableMicrophone();
 });
 
 const speakTextInput = document.querySelector("#speakText");
@@ -483,7 +565,10 @@ window.addEventListener("pagehide", stopSpeaking);
 
 // Hand a client a file, not a screen share. Audio is included when the
 // microphone is already running, so a voiced take needs no second pass.
-const recorder = new StageRecorder(canvas);
+const recorder = new StageRecorder(canvas, { onError: error => {
+  resetRecordingControls();
+  statusMessage(`Recording interrupted: ${error.message}`, "bad");
+} });
 const recordButton = document.querySelector("#recordButton");
 const recordStatus = document.querySelector("#recordStatus");
 let lastRecordSync = 0;
@@ -494,27 +579,53 @@ if (!recordingSupported()) {
   recordStatus.textContent = "unsupported here";
 }
 
+function resetRecordingControls() {
+  recordButton.classList.remove("recording");
+  recordButton.textContent = "⏺ Record WebM";
+  recordButton.disabled = !recordingSupported() || !renderer.available;
+  recordStatus.textContent = "";
+}
+renderer.addEventListener("contextlost", () => {
+  const interrupted = recorder.active || recorder.stopping;
+  recorder.cancel();
+  resetRecordingControls();
+  statusMessage(`Graphics context lost; waiting for recovery.${interrupted ? " Recording cancelled; microphone remains active." : ""}`, "bad");
+});
+renderer.addEventListener("contextrestored", () => {
+  resetRecordingControls();
+  statusMessage("Graphics recovered · character resumed", "good");
+});
+renderer.addEventListener("recoveryerror", event => {
+  resetRecordingControls();
+  statusMessage(`Graphics recovery failed: ${event.detail.message}. Reload the Viewer to retry.`, "bad");
+});
+
 recordButton.addEventListener("click", async () => {
   if (recorder.active) {
     recordButton.disabled = true;
     recordButton.textContent = "Saving…";
-    const blob = await recorder.stop();
-    const name = recordingName(model.meta.name);
-    if (blob) downloadRecording(blob, name);
-    recordButton.classList.remove("recording");
-    recordButton.textContent = "⏺ Record WebM";
-    recordButton.disabled = false;
-    recordStatus.textContent = blob ? `${(blob.size / 1e6).toFixed(1)} MB` : "";
-    statusMessage(blob ? `Saved ${name}` : "Recording discarded", blob ? "good" : "bad");
+    try {
+      const blob = await recorder.stop();
+      const name = recordingName(model.meta.name);
+      if (blob) downloadRecording(blob, name);
+      resetRecordingControls();
+      recordStatus.textContent = blob ? `${(blob.size / 1e6).toFixed(1)} MB` : "";
+      // Context-loss feedback must survive an in-flight save being cancelled.
+      if (renderer.available) statusMessage(blob ? `Saved ${name}` : "Recording discarded", blob ? "good" : "bad");
+    } catch (error) {
+      resetRecordingControls();
+      statusMessage(`Cannot save recording: ${error.message}`, "bad");
+    }
     return;
   }
   try {
-    const tracks = microphoneStream ? microphoneStream.getAudioTracks() : [];
+    // Timed playback takes precedence: a take uses one borrowed audio source.
+    const tracks = timedAudio.output && !timedAudio.audio.paused ? timedAudio.output.stream.getAudioTracks() : microphone.stream?.getAudioTracks() ?? [];
     recorder.start(tracks);
     recordButton.classList.add("recording");
     recordButton.textContent = "⏹ Stop recording";
     recordStatus.textContent = clock(0);
-    statusMessage(`Recording the stage${tracks.length ? " with microphone audio" : ""} · keep this tab visible`, "good");
+    statusMessage(`Recording the stage${tracks.length ? " with audio" : ""} · keep this tab visible`, "good");
   } catch (error) {
     statusMessage(`Cannot record: ${error.message}`, "bad");
   }
@@ -531,4 +642,11 @@ canvas.addEventListener("pointermove", (event) => {
 
 canvas.addEventListener("pointerleave", () => { gaze = null; });
 
-queueModel(async()=>model,source).then(() => requestAnimationFrame(animate));
+await queueModel(async()=>model,source);
+if(query.has("model")){
+  await queueModel(async()=>{
+    const url=new URL(query.get("model"),location.href);if(url.origin!==location.origin)throw new Error("Stream model must be served from this local app.");
+    const response=await fetch(url);if(!response.ok)throw new Error("Stream model was not found.");return importProject(await response.blob());
+  },"file");
+}
+listenControls(streamMode);requestAnimationFrame(animate);

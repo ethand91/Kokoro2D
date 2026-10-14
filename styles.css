@@ -286,3 +286,26 @@ button.recording::before { content: ""; display: inline-block; width: .5rem; hei
 .region-viewport canvas:focus-visible { outline:2px solid var(--pink); outline-offset:-2px; }
 .region-numeric summary { cursor:pointer; color:var(--muted); font-size:.75rem; margin-bottom:8px; }
 .viewer-stage-wrap.dragging { outline:3px dashed var(--pink); outline-offset:-6px; }
+
+/* Artist tools and optional performance controls. */
+.art-dialog { width: min(1000px, 94vw); max-height: 94vh; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 14px; }
+.art-tools { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.art-tools label { flex: 1 1 140px; }
+.art-canvas { width: 100%; height: auto; touch-action: none; background: repeating-conic-gradient(#33283d 0% 25%, #493750 0% 50%) 0 / 20px 20px; }
+.recovery-dialog { max-width: 90vw; color: var(--text); background: #24172f; border: 1px solid var(--line); border-radius: 12px; }
+.recovery-dialog button { display: block; margin: 8px 0; }
+.performance-tools { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.performance-tools summary { cursor: pointer; font-weight: 600; margin-bottom: 8px; }
+.performance-tools label { margin-top: 8px; }
+.performance-tools audio { width: 100%; margin-top: 8px; }
+.performance-tools output { display: block; margin: 8px 0; }
+#groupInspector { padding: 8px 0; }
+body.stream-mode, .stream-mode .viewer-stage-wrap { background: transparent !important; }
+.stream-mode .topbar, .stream-mode .viewer-sidebar, .stream-mode .viewer-title-card, .stream-mode .viewer-status { display: none !important; }
+.stream-mode .viewer-layout { display: block; width: 100vw; height: 100vh; }
+.stream-mode .viewer-stage-wrap { width: 100%; height: 100%; }
+.benchmark-layout { display: grid; grid-template-columns: 340px minmax(0,1fr); gap: 24px; padding: 24px; }
+#benchmarkCanvas { display: block; width: min(720px,100%); height: 760px; background: #21162b; }
+.benchmark-layout table { border-collapse: collapse; width: 100%; margin-top: 16px; }
+.benchmark-layout th, .benchmark-layout td { padding: 8px; text-align: left; border-bottom: 1px solid var(--line); }
+@media(max-width:800px){.benchmark-layout{grid-template-columns:1fr;}#benchmarkCanvas{height:70vh;}}
