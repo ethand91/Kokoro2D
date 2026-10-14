@@ -64,3 +64,11 @@ test("empty output is discarded and unsolicited stop still cleans up", async () 
   e.recorder.start(); e.recorder.recorder.stop(); await new Promise(resolve => setImmediate(resolve));
   assert.equal(e.recorder.active, false); assert.equal(e.recorder.context, null); assert.equal(e.video.stops, 2);
 });
+
+test("compositor failure discards the take, releases tracks, and permits another recording", async () => {
+  const e = setup(); e.recorder.start([e.audio]);
+  e.recorder.context.drawImage = () => { throw new Error("capture frame failed"); };
+  e.recorder.frame(); assert.equal(e.video.stops, 1); assert.equal(e.audio.stops, 0);
+  assert.equal(e.errors[0].message, "capture frame failed"); assert.equal(e.recorder.context, null);
+  e.recorder.start(); assert.ok((await e.recorder.stop()).size > 0);
+});

@@ -2,7 +2,7 @@ import { projectStore } from "./project-store.js";
 import { importProject } from "./project-file.js";
 import { FaceTracker } from "./face-tracking.js";
 import { AudioVisemePlayer } from "./audio-visemes.js";
-import { ControlInbox, parameterCommand, sendControl } from "./control-api.js";
+import { ControlInbox, parameterCommand, sendControl, validControlCommand } from "./control-api.js";
 import { MicrophoneController } from "./microphone.js";
 import { VisemeTalker } from "./viseme-lipsync.js";
 import { buildSpeechPerformance, sampleSpeechPerformance } from "./speech-performance.js";
@@ -22,11 +22,15 @@ const EXPRESSION_FACES = { "expr.happy": "✨", "expr.sad": "😢", "expr.angry"
 // Show what you just made. The Maker parks its work in localStorage, and a
 // Viewer that ignored it always opened on the bundled sample instead - so the
 // puppet you had just rigged was the one thing you could not look at.
+let makerRecoveryError = null;
 async function makerPuppet() {
   try {
-    const candidate = (await projectStore.load())?.model;
+    const saved = await projectStore.load(), candidate = saved?.model;
+    makerRecoveryError = saved?.recoveryWarning ?? null;
     return validateModel(candidate).length ? null : candidate;
-  } catch {
+  } catch (error) {
+    makerRecoveryError = error.message;
+    statusMessage(`Could not restore Maker project: ${error.message}. Stored work kept; use Recover project in the Maker.`, "bad");
     return null;
   }
 }
@@ -101,7 +105,7 @@ function rebuildExpressions() {
 function setExpression(id, toggle = true) {
   const next = toggle && values[id] >= 1 ? null : id;
   for (const parameter of Object.values(model.parameters)) {
-    if (parameter.id.startsWith("expr.")) values[parameter.id] = parameter.id === next ? 1 : 0;
+    if (parameter.id.startsWith("expr.")) values[parameter.id] = Math.max(parameter.min, Math.min(parameter.max, parameter.id === next ? 1 : 0));
   }
   for (const button of expressionRow.querySelectorAll("button")) {
     button.classList.toggle("active", button.dataset.expression === next);
@@ -217,14 +221,29 @@ renderer.camera.zoom=finiteQuery("zoom",.78,.2,2);renderer.camera.x=finiteQuery(
 for(const [id,key] of [["stageZoom","zoom"],["stageX","x"],["stageY","y"]]){const input=document.querySelector(`#${id}`);input.value=renderer.camera[key];input.oninput=()=>{renderer.camera[key]=Number(input.value);};}
 let trackingPose=null, trackingAt=-Infinity, lastBroadcastAt=0, broadcastBusy=false, lastMetricsAt=0;
 const frameSamples=[], remoteValues=new Map();
-const tracker=new FaceTracker(pose=>{if(pose){trackingPose=pose;trackingAt=performance.now();}},message=>{document.querySelector("#trackingStatus").textContent=message;});
-const trackingButton=document.querySelector("#enableTracking"), calibrateButton=document.querySelector("#calibrateTracking");
-trackingButton.onclick=async()=>{
-  if(tracker.stream){tracker.stop();trackingButton.textContent="Enable webcam";calibrateButton.disabled=true;document.querySelector("#trackingStatus").textContent="Webcam stopped";return;}
-  trackingButton.disabled=true;document.querySelector("#trackingStatus").textContent="Starting camera and downloading the face model…";
-  try{await tracker.start();trackingButton.textContent="Stop webcam";calibrateButton.disabled=false;}
-  catch(error){document.querySelector("#trackingStatus").textContent=`Tracking unavailable: ${error.message}`;}
-  finally{trackingButton.disabled=false;}
+const tracker = new FaceTracker(pose => { trackingPose = pose; trackingAt = pose ? performance.now() : -Infinity; }, message => {
+  document.querySelector("#trackingStatus").textContent = message;
+  if (!tracker.active && !tracker.starting) { trackingButton.textContent = "Enable webcam"; calibrateButton.disabled = true; }
+});
+const trackingButton = document.querySelector("#enableTracking"), calibrateButton = document.querySelector("#calibrateTracking");
+let trackingRequest = 0;
+trackingButton.onclick = async () => {
+  const request = ++trackingRequest;
+  if (tracker.starting || tracker.active) {
+    tracker.stop(); trackingButton.textContent = "Enable webcam"; calibrateButton.disabled = true;
+    document.querySelector("#trackingStatus").textContent = "Webcam stopped"; return;
+  }
+  trackingButton.textContent = "Cancel webcam request";
+  document.querySelector("#trackingStatus").textContent = "Starting camera and downloading the face model…";
+  try {
+    const started = await tracker.start();
+    if (request !== trackingRequest) return;
+    trackingButton.textContent = started ? "Stop webcam" : "Enable webcam"; calibrateButton.disabled = !started;
+  } catch (error) {
+    if (request !== trackingRequest) return;
+    trackingButton.textContent = "Enable webcam";
+    document.querySelector("#trackingStatus").textContent = `Tracking unavailable: ${error.message}`;
+  }
 };
 calibrateButton.onclick=()=>{try{tracker.calibrate();document.querySelector("#trackingStatus").textContent="Neutral face calibrated";}catch(error){document.querySelector("#trackingStatus").textContent=error.message;}};
 document.querySelector("#trackingSensitivity").oninput=e=>{tracker.sensitivity=Number(e.target.value);};
@@ -245,16 +264,30 @@ document.querySelector("#copyStreamUrl").onclick=async()=>{
 };
 function receiveControl(command){
   try{
+    if (!validControlCommand(command)) throw new Error("Invalid or oversized command.");
     if(command.type==="parameters"){
       if(document.querySelector("#broadcastPerformance").checked && !streamMode)return;
       const parsed=parameterCommand(command,model.parameters);if(parsed)for(const [id,value] of Object.entries(parsed.values))remoteValues.set(id,{value,until:performance.now()+parsed.holdMs});
-    }else if(command.type==="expression")setExpression(typeof command.id==="string" && command.id.startsWith("expr.") && model.parameters[command.id]?command.id:null,false);
+    }else if(command.type==="expression") {
+      if (command.id !== null && !Object.hasOwn(model.parameters, command.id)) throw new Error("Undeclared expression parameter.");
+      setExpression(command.id, false);
+    }
     else if(command.type==="reset"){remoteValues.clear();values=defaultParameterValues(model);motion.reset();setExpression(null,false);}
     else if(command.type==="speech" && typeof command.text==="string"){speakTextInput.value=command.text.slice(0,4000);speakButton.click();}
     else if(command.type==="visemes"){timedAudio.setTrack(command.track);timedStatus.textContent="Timed visemes received";}
   }catch(error){statusMessage(`Control rejected: ${error.message}`,"bad");}
 }
 let controlInbox=null;
+window.kokoroDiagnostics = () => {
+  const sorted = [...frameSamples].sort((a, b) => a - b);
+  const percentile = fraction => sorted.length ? sorted[Math.floor((sorted.length - 1) * fraction)] : 0;
+  return {
+    renderer: renderer.diagnostics(),
+    frames: { samples: sorted.length, averageMs: sorted.reduce((a, b) => a + b, 0) / (sorted.length || 1), p95Ms: percentile(.95), p99Ms: percentile(.99) },
+    tracking: { active: tracker.active, starting: tracker.starting, cameraTracks: tracker.stream?.getTracks().filter(track => track.readyState === "live").length ?? 0, worker: !!tracker.worker },
+    microphone: microphone.state, recording: recorder.active, controls: !!controlInbox?.active,
+  };
+};
 function listenControls(enabled){controlInbox?.stop();controlInbox=enabled?new ControlInbox(receiveControl):null;controlInbox?.start();}
 document.querySelector("#listenLocalControls").checked=streamMode;
 document.querySelector("#listenLocalControls").onchange=event=>listenControls(event.target.checked);
@@ -265,7 +298,8 @@ document.addEventListener("keydown",event=>{
   setExpression(id);if(document.querySelector("#broadcastPerformance").checked)sendControl({type:"expression",id:id && values[id]===1?id:null}).catch(()=>{});
 });
 window.addEventListener("pagehide", event => {
-  tracker.stop();
+  ++trackingRequest; tracker.stop();
+  trackingButton.textContent = "Enable webcam"; calibrateButton.disabled = true;
   timedAudio.dispose();
   controlInbox?.stop();
   if (event.persisted) microphone.disable();
@@ -649,4 +683,5 @@ if(query.has("model")){
     const response=await fetch(url);if(!response.ok)throw new Error("Stream model was not found.");return importProject(await response.blob());
   },"file");
 }
+if (makerRecoveryError && source !== "file") statusMessage(`Could not fully restore Maker project: ${makerRecoveryError}. Stored work kept; use Recover project in the Maker.`, "bad");
 listenControls(streamMode);requestAnimationFrame(animate);

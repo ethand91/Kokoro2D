@@ -26,9 +26,10 @@ async def lose_and_restore(page, selector, recording=False):
 
 async def main():
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=[
-            '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'])
-        context = await browser.new_context(permissions=['microphone'], viewport={'width': 1280, 'height': 900})
+        engine = os.environ.get("KOKORO_BROWSER", "chromium")
+        browser = await getattr(p, engine).launch(headless=True, **({"args": [
+            "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"]} if engine == "chromium" else {"firefox_user_prefs": {"media.navigator.streams.fake": True, "media.navigator.permission.disabled": True}}))
+        context = await browser.new_context(viewport={"width": 1280, "height": 900}, **({"permissions": ["microphone"]} if engine == "chromium" else {}))
         await context.add_init_script("""(() => {
           window.testStreams = []; window.testAudio = [];
           const media = navigator.mediaDevices, original = media.getUserMedia.bind(media);

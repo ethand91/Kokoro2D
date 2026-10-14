@@ -163,3 +163,18 @@ for (const method of ["createFramebuffer", "createRenderbuffer", "checkFramebuff
     renderer.dispose(); assert.equal(env.live.size, 0);
   });
 }
+
+test("disposal during decoding aborts the load and forbids subsequent activation", async () => {
+  const e = setup(), renderer = new KokoroRenderer(e.canvas, e.dependencies);
+  const slow = fixture(); slow.layers[0].source.src = "pending";
+  const rejected = assert.rejects(renderer.setModel(slow), { name: "AbortError" });
+  renderer.dispose(); await rejected;
+  assert.equal(e.live.size, 0); await assert.rejects(renderer.setModel(fixture()), /unavailable/);
+});
+test("frame upload GL errors are visible and retry reuploads vertices", async () => {
+  const e = setup(), renderer = new KokoroRenderer(e.canvas, e.dependencies);
+  await renderer.setModel(fixture()); e.fail("bufferSubData", 1, "gl");
+  assert.throws(() => renderer.render(), /frame rendering/);
+  assert.ok([...renderer.resources.values()].every(resource => !resource.uploaded));
+  renderer.render(); assert.equal(renderer.metrics.uploads, 2); renderer.dispose(); assert.equal(e.live.size, 0);
+});

@@ -5,7 +5,7 @@ import { bindParent,evaluateScene,sceneToLayer } from '../src/scene.js';
 import { validateRegions } from '../src/layered-rig.js';
 import { speechShape } from '../src/speech.js';
 import { PuppetMotion } from '../src/motion.js';
-const layer=name=>createLayer({name,src:'data:image/png;base64,AA==',width:100,height:100,columns:2,rows:2});
+const layer=name=>createLayer({name,src:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==',width:100,height:100,columns:2,rows:2});
 function rig(){const m=createModel(),body=layer('body'),head=layer('head'),eye=layer('eye');m.layers=[body,head,eye];bindParent(head,body);bindParent(eye,head);return {m,body,head,eye};}
 
 test('nested parent transforms compose and subsequent cage edits propagate',()=>{

@@ -57,5 +57,38 @@ class PerformanceEndpointTests(unittest.TestCase):
             self.assertEqual(self.request('/api/reconstruct',{'image':png,'mask':png})[0],503)
             self.assertFalse(serve.INFERENCE_LOCK.locked())
 
-if __name__=='__main__':
+class ControlSecurityTests(unittest.TestCase):
+    request = PerformanceEndpointTests.request
+    def test_rebinding_host_null_origin_and_foreign_fetch_site_are_rejected(self):
+        for headers in ({'Host':'evil.example:5173'}, {'Host':'localhost:bad'}, {'Origin':'null'}, {'Sec-Fetch-Site':'cross-site'}, {'Origin':'http://127.0.0.1:5173/path'}):
+            self.assertEqual(self.request('/api/control', {'type':'reset'}, headers=headers)[0], 403)
+
+    def test_non_loopback_listener_requires_token_and_configured_host(self):
+        handler = object.__new__(serve.NoStoreHandler)
+        handler.server = type('Server', (), {'server_address':('0.0.0.0',5173)})()
+        handler.headers = {'Host':'avatar.example:5173'}
+        with patch.dict('serve.os.environ', {}, clear=True):
+            self.assertFalse(handler.local_request())
+        with patch.dict('serve.os.environ', {'KOKORO_CONTROL_TOKEN':'secret', 'KOKORO_ALLOWED_HOST':'avatar.example:5173'}):
+            self.assertFalse(handler.local_request())
+            handler.headers['Authorization'] = 'Bearer sëcret'
+            self.assertFalse(handler.local_request())
+            handler.headers['Authorization'] = 'Bearer secret'
+            self.assertTrue(handler.local_request())
+            handler.headers['Origin'] = 'https://attacker.example'
+            self.assertFalse(handler.local_request())
+
+    def test_malformed_parameters_do_not_enter_queue(self):
+        for payload in ({'type':'parameters','values':[]}, {'type':'parameters','values':{'x':float('nan')}}, {'type':'parameters','values':{'x':float('inf')}}, {'type':'parameters','values':{'x':True}}, {'type':'parameters','values':{'__proto__':1}}, {'type':'parameters','values':{},'holdMs':'forever'}, {'type':'speech','text':'x'*4001}, {'type':'reset','padding':'x'*serve.MAX_COMMAND_BYTES}):
+            before = serve.CONTROL_SEQUENCE
+            self.assertEqual(self.request('/api/control', payload)[0], 400)
+            self.assertEqual(serve.CONTROL_SEQUENCE, before)
+
+    def test_private_files_and_symlink_escapes_are_not_served(self):
+        handler = object.__new__(serve.NoStoreHandler)
+        handler.directory = str(serve.ROOT)
+        self.assertEqual(handler.translate_path('/.git/config'), str(serve.ROOT/'__forbidden__'))
+        self.assertEqual(handler.translate_path('/src/model.js'), str(serve.ROOT/'src/model.js'))
+
+if __name__ == '__main__':
     unittest.main()

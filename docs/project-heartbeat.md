@@ -144,3 +144,11 @@ passed; an older stalled run was stopped explicitly.
   Existing uncommitted changes remain intact. This phase is left uncommitted to
   avoid mixing that earlier work into new commits; a session-only patch is
   available in the final handoff.
+
+## Phase 1.1 production hardening
+
+The follow-up audit, verified fixes, control trust boundary, executed Chromium
+and Firefox checks, benchmark method/results and remaining risks are documented
+in [Project Heartbeat Phase 1.1](project-heartbeat-phase1.1.md). That follow-up
+supersedes the Phase 1 notes above for control polling, face-tracking cancellation,
+storage recovery safety and CI availability; it introduces no model-schema change.

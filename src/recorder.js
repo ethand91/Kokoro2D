@@ -91,12 +91,18 @@ export class StageRecorder {
   // window can change shape mid-take and must not squash the character.
   frame() {
     if (!this.context) return;
-    const { width, height } = this.context.canvas;
-    const scale = Math.min(width / this.source.width, height / this.source.height);
-    const w = this.source.width * scale, h = this.source.height * scale;
-    this.context.fillStyle = this.gradient;
-    this.context.fillRect(0, 0, width, height);
-    this.context.drawImage(this.source, (width - w) / 2, (height - h) / 2, w, h);
+    try {
+      const { width, height } = this.context.canvas;
+      const scale = Math.min(width / this.source.width, height / this.source.height);
+      const w = this.source.width * scale, h = this.source.height * scale;
+      this.context.fillStyle = this.gradient;
+      this.context.fillRect(0, 0, width, height);
+      this.context.drawImage(this.source, (width - w) / 2, (height - h) / 2, w, h);
+    } catch (error) {
+      // A failed compositor must not kill the Viewer's animation loop.
+      if (!this.recorder) throw error;
+      this.#finish(error); this.onError(error);
+    }
   }
 
   stop() {

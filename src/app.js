@@ -75,7 +75,8 @@ function persist() {
   const generation = ++saveGeneration;
   return projectStore.save({ model: state.model, selectedLayerId: state.selectedLayerId }).then(() => {
     try { localStorage.setItem(AUTOSAVE_KEY, JSON.stringify({ database: true, at: Date.now() })); } catch { /* IndexedDB remains the primary save. */ }
-  }).catch(error => { if(generation===saveGeneration)setStatus(`Autosave failed: ${error.message}. Export a project to keep your work.`,"bad"); });
+    return true;
+  }).catch(error => { if(generation===saveGeneration)setStatus(`Autosave failed: ${error.message}. Export a project to keep your work.`,"bad"); return false; });
 }
 
 function checkpoint() {
@@ -103,7 +104,7 @@ function changed(message = "Changes autosaved locally") {
   refreshInspector();
 }
 
-async function loadModel(model, message = "Model loaded") {
+async function loadModel(model, message = "Model loaded", { save = true } = {}) {
   const errors = validateModel(model);
   if (errors.length) throw new Error(errors.join("\n"));
   await renderer.setModel(model);
@@ -114,8 +115,7 @@ async function loadModel(model, message = "Model loaded") {
   state.history.length = 0;
   state.future.length = 0;
   refreshAll();
-  await persist();
-  setStatus(message, "good");
+  if (!save || await persist()) setStatus(message, save ? "good" : "bad");
 }
 
 function refreshAll() {
@@ -765,8 +765,7 @@ async function boot() {
     }
   } catch (error) {
     console.error(error);
-    try { localStorage.removeItem(AUTOSAVE_KEY); } catch { /* unavailable storage */ }
-    await loadModel(await createLayeredSampleModel(), "Autosave was invalid; loaded sample");
+    await loadModel(await createLayeredSampleModel(), `Could not restore autosave: ${error.message}. Sample loaded; stored work kept. Use Recover project or export your work.`, { save: false });
   }
   state.dirty = false;
   requestAnimationFrame(animate);

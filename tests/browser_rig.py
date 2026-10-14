@@ -147,7 +147,7 @@ async def main():
         assert 'from the Maker' in await page.locator('#viewerStatus').inner_text()
         assert await page.locator('#loadSample').is_visible()
         await page.click('#loadSample')
-        await page.wait_for_timeout(2500)
+        await page.wait_for_function("document.querySelector('#viewerStatus').textContent.includes('bundled sample')", timeout=30000)
         assert 'bundled sample' in await page.locator('#viewerStatus').inner_text()
         assert not await page.locator('#loadSample').is_visible()
         await page.locator('#demoMode').uncheck()
@@ -181,7 +181,7 @@ async def main():
         assert clipping['outside'][3]==clipping['closed'][3]==0,clipping
         # Import the exported hierarchy and masks.
         await page.locator('#viewerFile').set_input_files({'name':'roundtrip.kokoro2d','mimeType':'application/json','buffer':json.dumps(exported).encode()})
-        await page.wait_for_timeout(300)
+        await page.wait_for_function("document.querySelector('#viewerStatus').textContent.includes('from file')", timeout=30000)
         assert await page.locator('#puppetTitle').inner_text()=='Kokoro-chan'
         # Pointer-driven eyes retain a target between pointer events.
         await page.locator('#demoMode').check()

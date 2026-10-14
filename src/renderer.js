@@ -158,6 +158,10 @@ export class KokoroRenderer extends EventTarget {
     canvas.addEventListener("webglcontextrestored", this.onContextRestored);
   }
 
+  diagnostics() {
+    return { state: this.state, loading: !!this.pendingLoad, layers: this.resources.size, textures: this.textures.size, surfaces: this.targets.length, ...this.metrics };
+  }
+
   get available() { return this.state === "ready" && !this.gl.isContextLost(); }
 
   #checkGL(operation) {
@@ -483,6 +487,11 @@ export class KokoroRenderer extends EventTarget {
       const result = renderGroup(null);
       gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.disable(gl.STENCIL_TEST); quad(result, result, 1, "normal", true);
       result.busy = false; gl.stencilMask(0xff); gl.bindVertexArray(null);
+      this.#checkGL("frame rendering");
+    } catch (error) {
+      // An unsuccessful upload is not a committed vertex cache.
+      for (const resource of this.resources.values()) resource.uploaded = false;
+      throw error;
     } finally {
       for (const target of this.targets) target.busy = false;
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
